@@ -68,8 +68,6 @@ Facts verified against this tree, so you do not have to rediscover them:
 2. **FindONNXRuntime, rest**: let CMake call `tools/fetch-onnxruntime.sh` itself when nothing is found
   (`BUILD_ORT`-style option), the aarch64 and Termux variants (`fetch-onnxruntime.sh VERSION linux-arm64`,
   Android needs the aar), and a cross build against `/mnt/data/sysroots/ort-1.32.0-aarch64`.
-- **Examples and README**: `examples/` with the u2netp cutout and a small sequence model in a loop; README status
-  line and Build section updated to the real state.
 - **opencv-imgproc.js**: an `ort` backend for `--dnn-model` next to `dnn` (qjs-opencv's file, ask first).
 - `runAsync()` through a worker thread and a promise (no JS calls from ORT threads).
 - Other execution providers (XNNPACK, NNAPI on the phone, CUDA on the workstation) through `options.providers`.

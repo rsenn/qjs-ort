@@ -7,15 +7,18 @@ and run it from JavaScript, with typed arrays in and out.
 import { Session, Tensor } from 'ort';
 
 const session = new Session('bassline.onnx');
-console.log(session.inputNames, session.outputNames);
+console.log(session.inputs, session.outputs);   // [{ name, type, dims }, ...]
 
 const input = new Tensor('float32', new Float32Array(1 * 16), [1, 16]);
 const { next } = session.run({ context: input });
 console.log(next.dims, next.data);       // a Float32Array view of the result
 ```
 
-> **Status: design stage.** There is no code yet; this page describes what the module is for and what its API
-> is going to look like. See [TODO.md](TODO.md) for the order of work.
+> **Status: works, early.** `Tensor` (float32, float64, int32, int64, uint8, bool), `Session` (from a file or
+> from bytes, thread and optimisation options, input and output metadata) and a synchronous `session.run()` are
+> implemented and tested; `u2netp.onnx` gives the same result as OpenCV `dnn`. Only the CPU execution provider
+> is used so far. See [TODO.md](TODO.md) for what comes next and [doc/native/ort.md](doc/native/ort.md) for the
+> full API page.
 
 ## Why
 
@@ -31,19 +34,28 @@ binding talks to ONNX Runtime directly. The workflow it is built for:
 Through the N-API adapter of [js-engines](https://github.com/rsenn/js-engines) the same prebuilt `ort.so`
 can also be imported from Bun, Node and Deno.
 
-## Planned API
+## API
 
 | | |
 |---|---|
-| `new Tensor(type, data, dims)` | `type` is `'float32'`, `'float64'`, `'int32'`, `'int64'`, `'uint8'`, `'bool'`, `'string'`. `data` is the matching typed array, used without copying. `.type`, `.data`, `.dims`. |
-| `new Session(pathOrBuffer, options)` | `options`: `providers`, `intraOpThreads`, `interOpThreads`, `graphOptimization`, `logLevel`. |
-| `session.inputNames`, `.outputNames` | Arrays of strings. `.inputs` and `.outputs` also carry type and shape. |
-| `session.run(feeds, outputNames?)` | `feeds` maps an input name to a `Tensor`; returns an object that maps an output name to a `Tensor`. Synchronous. |
+| `new Tensor(type, data, dims)` | `type` is `'float32'`, `'float64'`, `'int32'`, `'int64'`, `'uint8'` or `'bool'` (`'string'` and `'float16'` are planned). `data` is the matching typed array (`BigInt64Array` for `int64`), used without copying. `.type`, `.data`, `.dims`. |
+| `new Session(pathOrBuffer, options?)` | A file path, or an `ArrayBuffer` or typed array that holds the model. `options`: `intraOpThreads`, `interOpThreads`, `graphOptimization` (`'disable'`, `'basic'`, `'extended'`, `'all'`), `logLevel`. `providers` is planned. |
+| `session.inputNames`, `.outputNames` | Arrays of strings. |
+| `session.inputs`, `.outputs` | Arrays of `{ name, type, dims }`; a dynamic dimension is `-1`. |
+| `session.run(feeds, outputNames?)` | `feeds` maps an input name to a `Tensor`; returns an object that maps an output name to a `Tensor`. Synchronous. The `data` of an output is a view of the memory ONNX Runtime allocated, `.slice()` it to keep it. |
 | `session.release()` | Frees the native session before the garbage collector does. |
-| `ort.version`, `ort.providers` | The ONNX Runtime version and the execution providers it was built with. |
+| `ort.version` | The ONNX Runtime version. `ort.providers` is planned. |
 
-Errors are thrown as exceptions. The naming follows the other ONNX Runtime bindings (onnxruntime-node, Python,
-Rust, Go), which agree on this shape.
+Errors are thrown as exceptions: ONNX Runtime failures as `Error` with its message and a numeric `code`, wrong
+arguments as `TypeError` or `RangeError`. The naming follows the other ONNX Runtime bindings (onnxruntime-node,
+Python, Rust, Go), which agree on this shape.
+
+## Examples
+
+| | |
+|---|---|
+| [`examples/gru/`](examples/gru) | A GRU cell run one step at a time with the hidden state fed back, the shape of a realtime loop. The 5 KB model is in the repository and `make-model.py` exports it; the script checks every step against ONNX Runtime for Python. |
+| [`examples/u2netp-cutout.js`](examples/u2netp-cutout.js) | Cuts the salient object out of a picture with `u2netp.onnx` (not in the repository) and writes a PNG with the matte as its alpha channel. Needs [qjs-opencv](https://github.com/rsenn/qjs-opencv). |
 
 ## Requirements
 
@@ -55,13 +67,15 @@ Rust, Go), which agree on this shape.
 
 ## Build
 
-Not wired up yet. It will follow the other `qjs-*` projects:
-
 ```sh
-cmake -B build -DORT_PREFIX=/path/to/onnxruntime
-cmake --build build
-cmake --install build
+tools/fetch-onnxruntime.sh                 # ONNX Runtime into third_party/, or pass -DORT_PREFIX=...
+cmake -B build/x86_64-linux-debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/x86_64-linux-debug
+QUICKJS_MODULE_PATH=build/x86_64-linux-debug qjsm tests/ort-test.js
+cmake --install build/x86_64-linux-debug   # ort.so and libonnxruntime.so.1 into the QuickJS module directory
 ```
+
+Use `qjsm`, plain `qjs` cannot import native modules. The other tests are in `tests/`, run each the same way.
 
 ## Related
 

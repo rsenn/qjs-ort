@@ -382,3 +382,26 @@
 	* TODO.md (item 1):
 	Delete the words "inputs/outputs (name, element type, dims)", keep
 	wrapped at about 120 columns.
+
+2026-11-25  Roman Senn  <roman.l.senn@gmail.com>
+
+	Examples, and the README describes the real state.
+
+	* examples/gru/make-model.py, gru-step.onnx, gru-expected.json:
+	New. Exports a GRU step model (x [1,1,8] and h [1,1,16] in, y and hn
+	out, 5.6 KB) with the audio-ml environment and records what ONNX
+	Runtime for Python gives for 12 random steps.
+
+	* examples/gru/gru-loop.js:
+	New. Feeds hn back as h in a loop and compares every y with the
+	recorded values (max difference 0, the limit is 1e-5; with the
+	feedback removed it fails with 0.35).
+
+	* examples/u2netp-cutout.js:
+	New. u2netp matte scaled to the picture and stored as the alpha
+	channel of a PNG, checked on the whiteboard test picture (42% of the
+	pixels transparent, 16% opaque).
+
+	* README.md, TODO.md:
+	Status, API table, example and build sections written for what
+	exists, the examples item is removed from the TODO list.
