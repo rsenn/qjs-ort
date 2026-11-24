@@ -19,7 +19,7 @@ directory. The API is sketched in `doc/native/ort.md`; keep that page in step wi
 marked there).
 
 Done so far (see ChangeLog): CMake skeleton, module `ort` that exports `version`, `FindONNXRuntime.cmake`,
-`tools/fetch-onnxruntime.sh` with the x86_64 copy in `third_party/`, `js-utils.[ch]`, the float32 `Tensor` class.
+`tools/fetch-onnxruntime.sh` with the x86_64 copy in `third_party/`, `js-utils.[ch]`, the float32 `Tensor` class, the minimal `Session` class.
 
 ## In progress
 
@@ -72,62 +72,7 @@ Facts verified against this tree, so you do not have to rediscover them:
 
 ## PoC tasks, in this order
 
-(Task 1, the float32 `Tensor`, is done: see the ChangeLog. Its output-tensor `data` getter returns `undefined` until task 3.)
-
-### 2. `Session`, minimal
-
-Files: `quickjs-ort.c`.
-
-Native struct:
-
-```c
-typedef struct {
-  OrtSession* session;                  /* owned; NULL after release() */
-  size_t n_inputs, n_outputs;
-  char** input_names;                   /* js_malloc'd array of js_strdup'd names, n_inputs long */
-  char** output_names;
-} JSOrtSession;
-```
-
-Names are copied out once at construction and kept as C strings, because `Run` needs `const char* const*`
-arrays and the getters need them again. They are freed in the finalizer with `js_free_rt` (one function
-`js_ort_session_free_names(JSRuntime*, char**, size_t)`; `js_strdup` is context-bound, so use
-`js_malloc` + `memcpy` or `js_strdup` at construction and `js_free_rt` in the finalizer, both are the same
-allocator).
-
-Constructor `js_ort_session_ctor`:
-
-1. `js_ort_init_api`; `argc < 1` is `TypeError("Session needs a model path")`; the argument must be a string
-   (`JS_IsString`) else `TypeError` (buffers are not in the PoC; say so in the message: "model path expected").
-2. `path = JS_ToCString`; `ort_api->CreateSessionOptions(&opts)`; `CreateSession(ort_env, path, opts, &session)`;
-   `ReleaseSessionOptions(opts)` and `JS_FreeCString` on every path. Linux/macOS only: under `#ifdef _WIN32`
-   the path type is `wchar_t`, write `#error "wide path conversion not implemented"` rather than a wrong
-   `char*` call (a task for the later list).
-3. `SessionGetInputCount`/`SessionGetOutputCount`, then per index `SessionGetInputName(session, i, alloc,
-   &name)` / `SessionGetOutputName`, copy into the arrays, `alloc->Free(alloc, name)`.
-4. Object via `js_object_from_target`, `JS_SetOpaque`. One `fail:` label releasing the session and the names
-   collected so far.
-
-Missing file: ORT answers with code `ORT_NO_SUCHFILE`; not a model: `ORT_INVALID_PROTOBUF` or `ORT_NO_MODEL`;
-both surface through `js_ort_throw_status`, the message is ORT's, do not rewrite it.
-
-Members:
-
-- `inputNames`, `outputNames`: getters that build a new `Array` of `JS_NewString` each call (`JS_NewArray`,
-  `JS_SetPropertyUint32`). After `release()` the cached names are still valid, so they keep working.
-- `release()`: `JS_GetOpaque2`, `ReleaseSession`, set `session = NULL`, return `undefined`; second call is a no-op.
-- `Symbol.toStringTag` `"Session"`.
-- `run` is task 3; register its slot only then.
-
-Finalizer: release the session if not NULL, free names and struct; NULL opaque tolerated.
-
-Export `Session` next to `Tensor`.
-
-Verify (by hand, the model file is `~/Sources/quickjs/qjs-opencv/models/u2netp.onnx`): construct it, print
-`inputNames` and `outputNames`, write them down in the TODO item of task 4 (they are not known yet); a missing
-path throws `Error` with `code === 3`; a text file as model throws `Error` with `code` 7 or 4; `release()` twice;
-`new Session()` and `new Session(42)` throw `TypeError`; leak check with 100 rounds of load and drop (the model
-is 4.4 MB, so also watch the process RSS once, it must not climb by 4.4 MB per round).
+(Tasks 1 and 2, the float32 `Tensor` and the minimal `Session`, are done: see the ChangeLog. The output-tensor `data` getter returns `undefined` until task 3. The u2netp input name is `input.1`, its outputs are `1959` to `1965`; the first output is the probability map.)
 
 ### 3. `session.run(feeds, outputNames?)`
 

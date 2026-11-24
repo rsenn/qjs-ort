@@ -20,14 +20,16 @@ js_ort_types[] = {
   /* { "bool", ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL, 1, JS_TYPED_ARRAY_UINT8 }, */
 };
 
-static int js_ort_type_by_name(const char* name) {
+static int
+js_ort_type_by_name(const char* name) {
   for(size_t i = 0; i < countof(js_ort_types); i++)
     if(!strcmp(name, js_ort_types[i].name))
       return i;
   return -1;
 }
 
-static int js_ort_type_by_onnx(ONNXTensorElementDataType onnx) {
+static int
+js_ort_type_by_onnx(ONNXTensorElementDataType onnx) {
   for(size_t i = 0; i < countof(js_ort_types); i++)
     if(js_ort_types[i].onnx == onnx)
       return i;
@@ -40,7 +42,15 @@ typedef struct {
   JSValue data;        /* input tensor: the typed array, owned (JS_DupValue); output tensor: JS_UNDEFINED */
 } JSOrtTensor;
 
+typedef struct {
+  OrtSession* session;                  /* owned; NULL after release() */
+  size_t n_inputs, n_outputs;
+  char** input_names;                   /* js_malloc'd array of js_strdup'd names, n_inputs long */
+  char** output_names;                  /* js_malloc'd array of js_strdup'd names, n_outputs long */
+} JSOrtSession;
+
 static JSClassID js_ort_tensor_class_id;
+static JSClassID js_ort_session_class_id;
 
 static JSValue js_ort_throw_status(JSContext* ctx, OrtStatus* status);
 
@@ -82,7 +92,8 @@ js_ort_throw_status(JSContext* ctx, OrtStatus* status) {
   return JS_Throw(ctx, err);
 }
 
-static void js_ort_tensor_finalizer(JSRuntime* rt, JSValue val) {
+static void
+js_ort_tensor_finalizer(JSRuntime* rt, JSValue val) {
   JSOrtTensor* s = JS_GetOpaque(val, js_ort_tensor_class_id);
   if(!s)
     return;
@@ -96,7 +107,33 @@ static void js_ort_tensor_finalizer(JSRuntime* rt, JSValue val) {
   js_free_rt(rt, s);
 }
 
-static void js_ort_tensor_gc_mark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func) {
+static void
+js_ort_session_free_names(JSRuntime* rt, char** names, size_t n) {
+  for(size_t i = 0; i < n; i++)
+    js_free_rt(rt, names[i]);
+  js_free_rt(rt, names);
+}
+
+static void
+js_ort_session_finalizer(JSRuntime* rt, JSValue val) {
+  JSOrtSession* s = JS_GetOpaque(val, js_ort_session_class_id);
+  if(!s)
+    return;
+
+  if(s->session)
+    ort_api->ReleaseSession(s->session);
+
+  if(s->input_names)
+    js_ort_session_free_names(rt, s->input_names, s->n_inputs);
+
+  if(s->output_names)
+    js_ort_session_free_names(rt, s->output_names, s->n_outputs);
+
+  js_free_rt(rt, s);
+}
+
+static void
+js_ort_tensor_gc_mark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func) {
   JSOrtTensor* s = JS_GetOpaque(val, js_ort_tensor_class_id);
   if(s && !JS_IsUndefined(s->data))
     JS_MarkValue(rt, s->data, mark_func);
@@ -188,7 +225,8 @@ js_ort_tensor_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCon
   return obj;
 }
 
-static JSValue js_ort_tensor_get_type(JSContext* ctx, JSValueConst this_val) {
+static JSValue
+js_ort_tensor_get_type(JSContext* ctx, JSValueConst this_val) {
   JSOrtTensor* s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id);
   if(!s)
     return JS_EXCEPTION;
@@ -238,7 +276,8 @@ js_ort_tensor_get_dims(JSContext* ctx, JSValueConst this_val) {
   return arr;
 }
 
-static JSValue js_ort_tensor_get_data(JSContext* ctx, JSValueConst this_val) {
+static JSValue
+js_ort_tensor_get_data(JSContext* ctx, JSValueConst this_val) {
   JSOrtTensor* s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id);
   if(!s)
     return JS_EXCEPTION;
@@ -312,6 +351,203 @@ js_ort_tensor_wrap(JSContext* ctx, OrtValue* value) {
   return obj;
 }
 
+static JSValue
+js_ort_session_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst argv[]) {
+  const char* path = NULL;
+  OrtSessionOptions* opts = NULL;
+  OrtSession* session = NULL;
+  OrtStatus* status = NULL;
+  OrtAllocator* alloc = NULL;
+  JSValue obj;
+  JSOrtSession* s = NULL;
+  size_t n_inputs = 0;
+  size_t n_outputs = 0;
+  char** input_names = NULL;
+  char** output_names = NULL;
+
+  if(js_ort_init_api(ctx))
+    return JS_EXCEPTION;
+
+  if(argc < 1 || !JS_IsString(argv[0]))
+    return JS_ThrowTypeError(ctx, "Session needs a model path");
+
+  path = JS_ToCString(ctx, argv[0]);
+  if(!path)
+    return JS_EXCEPTION;
+
+#ifdef _WIN32
+#error "wide path conversion not implemented"
+#else
+  if((status = ort_api->CreateSessionOptions(&opts)))
+    goto fail;
+
+  if((status = ort_api->CreateSession(ort_env, path, opts, &session)))
+    goto fail;
+
+  ort_api->ReleaseSessionOptions(opts);
+  opts = NULL;
+#endif
+
+  JS_FreeCString(ctx, path);
+  path = NULL;
+
+  if((status = ort_api->GetAllocatorWithDefaultOptions(&alloc)))
+    goto fail;
+
+  if((status = ort_api->SessionGetInputCount(session, &n_inputs)))
+    goto fail;
+
+  if((status = ort_api->SessionGetOutputCount(session, &n_outputs)))
+    goto fail;
+
+  input_names = js_mallocz(ctx, n_inputs * sizeof(char*));
+  if(!input_names) {
+    JS_ThrowOutOfMemory(ctx);
+    goto cleanup;
+  }
+
+  output_names = js_mallocz(ctx, n_outputs * sizeof(char*));
+  if(!output_names) {
+    JS_ThrowOutOfMemory(ctx);
+    goto cleanup;
+  }
+
+  for(size_t i = 0; i < n_inputs; i++) {
+    char* name = NULL;
+    if((status = ort_api->SessionGetInputName(session, i, alloc, &name)))
+      goto fail;
+    input_names[i] = js_strdup(ctx, name);
+    alloc->Free(alloc, name);
+    if(!input_names[i]) {
+      JS_ThrowOutOfMemory(ctx);
+      goto cleanup;
+    }
+  }
+
+  for(size_t i = 0; i < n_outputs; i++) {
+    char* name = NULL;
+    if((status = ort_api->SessionGetOutputName(session, i, alloc, &name)))
+      goto fail;
+    output_names[i] = js_strdup(ctx, name);
+    alloc->Free(alloc, name);
+    if(!output_names[i]) {
+      JS_ThrowOutOfMemory(ctx);
+      goto cleanup;
+    }
+  }
+
+  obj = js_object_from_target(ctx, new_target, js_ort_session_class_id);
+  if(JS_IsException(obj))
+    goto cleanup;
+
+  s = js_mallocz(ctx, sizeof(*s));
+  if(!s) {
+    JS_FreeValue(ctx, obj);
+    JS_ThrowOutOfMemory(ctx);
+    goto cleanup;
+  }
+
+  s->session = session;
+  s->n_inputs = n_inputs;
+  s->n_outputs = n_outputs;
+  s->input_names = input_names;
+  s->output_names = output_names;
+  JS_SetOpaque(obj, s);
+  return obj;
+
+fail:
+  js_ort_throw_status(ctx, status);
+
+cleanup:
+  if(session)
+    ort_api->ReleaseSession(session);
+  if(opts)
+    ort_api->ReleaseSessionOptions(opts);
+  if(input_names)
+    js_ort_session_free_names(JS_GetRuntime(ctx), input_names, n_inputs);
+  if(output_names)
+    js_ort_session_free_names(JS_GetRuntime(ctx), output_names, n_outputs);
+  if(path)
+    JS_FreeCString(ctx, path);
+
+  return JS_EXCEPTION;
+}
+
+static JSValue
+js_ort_session_get_input_names(JSContext* ctx, JSValueConst this_val) {
+  JSOrtSession* s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id);
+  JSValue arr;
+
+  if(!s)
+    return JS_EXCEPTION;
+
+  arr = JS_NewArray(ctx);
+  if(JS_IsException(arr))
+    return arr;
+
+  for(size_t i = 0; i < s->n_inputs; i++) {
+    JSValue name = JS_NewString(ctx, s->input_names[i]);
+    if(JS_IsException(name)) {
+      JS_FreeValue(ctx, arr);
+      return JS_EXCEPTION;
+    }
+    JS_SetPropertyUint32(ctx, arr, i, name);
+  }
+
+  return arr;
+}
+
+static JSValue
+js_ort_session_get_output_names(JSContext* ctx, JSValueConst this_val) {
+  JSOrtSession* s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id);
+  JSValue arr;
+
+  if(!s)
+    return JS_EXCEPTION;
+
+  arr = JS_NewArray(ctx);
+  if(JS_IsException(arr))
+    return arr;
+
+  for(size_t i = 0; i < s->n_outputs; i++) {
+    JSValue name = JS_NewString(ctx, s->output_names[i]);
+    if(JS_IsException(name)) {
+      JS_FreeValue(ctx, arr);
+      return JS_EXCEPTION;
+    }
+    JS_SetPropertyUint32(ctx, arr, i, name);
+  }
+
+  return arr;
+}
+
+static JSValue
+js_ort_session_release(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst argv[]) {
+  JSOrtSession* s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id);
+
+  if(!s)
+    return JS_EXCEPTION;
+
+  if(s->session) {
+    ort_api->ReleaseSession(s->session);
+    s->session = NULL;
+  }
+
+  return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry js_ort_session_proto_funcs[] = {
+  JS_CGETSET_DEF("inputNames", js_ort_session_get_input_names, NULL),
+  JS_CGETSET_DEF("outputNames", js_ort_session_get_output_names, NULL),
+  JS_CFUNC_DEF("release", 0, js_ort_session_release),
+  JS_PROP_STRING_DEF("[Symbol.toStringTag]", "Session", JS_PROP_CONFIGURABLE),
+};
+
+static JSClassDef js_ort_session_class = {
+  .class_name = "Session",
+  .finalizer = js_ort_session_finalizer,
+};
+
 #ifdef JS_SHARED_LIBRARY
 #if defined(_WIN32) || defined(__MINGW32__)
 #define VISIBLE __declspec(dllexport)
@@ -340,6 +576,15 @@ js_ort_init(JSContext* ctx, JSModuleDef* m) {
   if(JS_SetModuleExport(ctx, m, "Tensor", ctor) < 0)
     return -1;
 
+  ctor = js_class_register(ctx, &js_ort_session_class_id, &js_ort_session_class,
+                            js_ort_session_ctor, 1,
+                            js_ort_session_proto_funcs, countof(js_ort_session_proto_funcs));
+  if(JS_IsException(ctor))
+    return -1;
+
+  if(JS_SetModuleExport(ctx, m, "Session", ctor) < 0)
+    return -1;
+
   return JS_SetModuleExport(ctx, m, "version", js_ort_version(ctx));
 }
 
@@ -352,6 +597,7 @@ JS_INIT_MODULE(JSContext* ctx, const char* module_name) {
 
   JS_AddModuleExport(ctx, m, "version");
   JS_AddModuleExport(ctx, m, "Tensor");
+  JS_AddModuleExport(ctx, m, "Session");
 
   return m;
 }

@@ -115,3 +115,28 @@
 
 	* TODO.md:
 	Task 1 deleted.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	Session class, minimal (PoC task 2), written by the nemotron harness
+	session and reviewed.
+
+	* quickjs-ort.c (js_ort_session_ctor, js_ort_session_finalizer,
+	js_ort_session_free_names, js_ort_session_get_input_names,
+	js_ort_session_get_output_names,
+	js_ort_session_release, js_ort_init):
+	New. Session(path) on the CPU provider with default options,
+	inputNames and outputNames, release(), Symbol.toStringTag. The names
+	are copied into QuickJS memory and the ORT originals freed at once.
+	Every failure path releases the session, the options and the names
+	collected so far, and the path string is freed once. Function
+	definitions of the file now follow the C style rule of one line for
+	the return type.
+
+	* tests/session-test.js:
+	New. Loads u2netp.onnx, prints the names (input.1, outputs 1959 to
+	1965), missing file gives code 3, a text file gives code 7, release
+	twice, bad arguments, names after release.
+
+	* TODO.md:
+	Task 2 deleted, the u2netp names recorded.
