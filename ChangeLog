@@ -268,3 +268,27 @@
 
 	* TODO.md:
 	Item done and removed.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	Tensor element types float64, int32, int64, uint8 and bool.
+
+	* quickjs-ort.c (js_ort_types):
+	Enable the five rows. The rest of the code already read the table, so
+	the constructor, the type and data getters and the output wrapping
+	need nothing else. int64 data is a BigInt64Array, bool and uint8 data
+	a Uint8Array.
+
+	* tests/types-test.js:
+	New, 66 checks. One hand-built model per type (Add, Identity for
+	bool) gives exact results, int64 values beyond 2^53, the class of the
+	output data, the same array object on an input tensor, subarrays with
+	an offset, TypeError for a wrong typed array (Int8Array for uint8,
+	Uint8ClampedArray for bool, Float64Array for float32 and so on) and
+	an ORT error for a type mismatch between feed and model. First
+	version from the nemotron harness, reviewed and run with the four
+	older tests.
+
+	* doc/native/ort.md, TODO.md:
+	The Tensor section lists the six types as supported, string and
+	float16 stay planned. The item in TODO.md shrinks accordingly.

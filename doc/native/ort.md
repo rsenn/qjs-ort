@@ -31,8 +31,8 @@ new Tensor(type, data, dims)
 
 | Argument | |
 |---|---|
-| `type` | Element type name. PoC: `'float32'` only. Planned: `'float64'`, `'int32'`, `'int64'`, `'uint8'`, `'bool'`, `'string'`, `'float16'`. |
-| `data` | The matching typed array (`Float32Array` for `'float32'`; `BigInt64Array` for `'int64'`; `Uint8Array` for `'uint8'` and `'bool'`). It is **not copied**: writing to it changes the tensor, and the tensor keeps it alive. |
+| `type` | Element type name. Supported: `'float32'`, `'float64'`, `'int32'`, `'int64'`, `'uint8'`, `'bool'`. Planned: `'string'`, `'float16'`. |
+| `data` | The matching typed array (`Float32Array` for `'float32'`; `Float64Array` for `'float64'`; `Int32Array` for `'int32'`; `BigInt64Array` for `'int64'`; `Uint8Array` for `'uint8'` and `'bool'`). It is **not copied**: writing to it changes the tensor, and the tensor keeps it alive. For `'bool'` the data is a `Uint8Array` with values 0 or 1. For `'int64'` the data is a `BigInt64Array`. |
 | `dims` | Array of non-negative integers. The product must equal `data.length`, else `RangeError`. `[]` is a scalar (one element). |
 
 | Member | |
@@ -87,6 +87,9 @@ A failed ONNX Runtime call throws an `Error` whose message is ONNX Runtime's own
 `ORT_NO_SUCHFILE`, `7` `ORT_INVALID_PROTOBUF`, ...; the module does not export the names yet). Mistakes the
 binding can see itself are `TypeError` (wrong kind of argument, unknown or missing input name) or `RangeError`
 (dims). A call never crashes the process on bad input.
+
+For a tensor of type `'bool'` the data is a `Uint8Array` (one byte per element, 0 or 1) in both
+directions; no conversion is done. For a tensor of type `'int64'` the data is a `BigInt64Array`.
 
 ## Threads
 

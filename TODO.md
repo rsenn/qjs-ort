@@ -62,8 +62,8 @@ Facts verified against this tree, so you do not have to rediscover them:
 
 ## Next, in this order
 
-1. **Rest of the Tensor/Session surface** from `doc/native/ort.md`: element types float64/int32/int64/uint8/bool,
-  string later; `new Session(pathOrBuffer, options)` with `providers`, `intraOpThreads`, `interOpThreads`,
+1. **Rest of the Tensor/Session surface** from `doc/native/ort.md`: element type string, float16 later;
+  `new Session(pathOrBuffer, options)` with `providers`, `intraOpThreads`, `interOpThreads`,
   `graphOptimization`, `logLevel`; `inputs`/`outputs` (name, element type, dims); `ort.providers`; wide paths on
   Windows.
 2. **FindONNXRuntime, rest**: let CMake call `tools/fetch-onnxruntime.sh` itself when nothing is found
