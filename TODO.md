@@ -19,7 +19,7 @@ directory. The API is sketched in `doc/native/ort.md`; keep that page in step wi
 marked there).
 
 Done so far (see ChangeLog): CMake skeleton, module `ort` that exports `version`, `FindONNXRuntime.cmake`,
-`tools/fetch-onnxruntime.sh` with the x86_64 copy in `third_party/`.
+`tools/fetch-onnxruntime.sh` with the x86_64 copy in `third_party/`, `js-utils.[ch]`, the float32 `Tensor` class.
 
 ## In progress
 
@@ -72,111 +72,7 @@ Facts verified against this tree, so you do not have to rediscover them:
 
 ## PoC tasks, in this order
 
-### 1. `Tensor`, float32 only
-
-Files: `quickjs-ort.c`. Test by hand with a throw-away script; the permanent test is task 4.
-
-Shared state, all `static` and created on first use by `js_ort_init_api(JSContext*)`, which returns 0 or throws:
-
-```c
-static const OrtApi* ort_api;      /* OrtGetApiBase()->GetApi(ORT_API_VERSION), NULL: library too old */
-static OrtEnv* ort_env;            /* CreateEnv(ORT_LOGGING_LEVEL_WARNING, "qjs-ort", &ort_env) */
-static OrtMemoryInfo* ort_cpu;     /* CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &ort_cpu) */
-```
-
-The env and memory info live until the process ends (a module has no unload hook); say so in a comment. Call
-`js_ort_init_api` at the top of the `Tensor` and `Session` constructors, not at module init, so that
-`import 'ort'` keeps working to print `version` on a machine where the runtime is unusable.
-
-Error helper used by every later task:
-
-```c
-static JSValue js_ort_throw_status(JSContext* ctx, OrtStatus* status);
-```
-
-It reads message and code, builds the exception with `JS_NewError`, sets the message with
-`JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, msg), JS_PROP_C_W_E)` (so it is a plain own
-property) and `code` with `JS_NewInt32`, releases the status, and returns `JS_Throw(ctx, err)`. Callers write
-`if((status = ort_api->X(...))) return js_ort_throw_status(ctx, status);`, so the helper may assume `status` is non-NULL.
-
-Element type table, the only place that knows about types (one row per type; the PoC enables one row, the other
-rows are written as comments so adding them is uncommenting):
-
-```c
-static const struct { const char* name; ONNXTensorElementDataType onnx; size_t size; JSTypedArrayEnum array; }
-js_ort_types[] = {
-  { "float32", ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, 4, JS_TYPED_ARRAY_FLOAT32 },
-  /* { "float64", ..._DOUBLE, 8, JS_TYPED_ARRAY_FLOAT64 }, int32, int64 (BigInt64Array), uint8, bool (Uint8Array) */
-};
-```
-
-with two lookups, by name and by `ONNXTensorElementDataType`. The `array` column is the `JSTypedArrayEnum` that
-`js_typedarray_expect` checks and `js_typedarray_external` creates, so a later type is one more row, no new code.
-
-Native struct, in `JS_SetOpaque` of every Tensor object:
-
-```c
-typedef struct {
-  OrtValue* value;     /* owned, released in the finalizer */
-  int type;            /* index into js_ort_types */
-  JSValue data;        /* input tensor: the typed array, owned (JS_DupValue); output tensor: JS_UNDEFINED */
-} JSOrtTensor;
-```
-
-Allocate with `js_mallocz`, free with `js_free_rt`.
-
-Constructor `js_ort_tensor_ctor(ctx, new_target, argc, argv)`:
-
-1. `argc < 3` is `TypeError("Tensor needs type, data and dims")`.
-2. `type`: `JS_ToCString`, look it up, free the C string, unknown name is `TypeError("unknown tensor type 'x'")`.
-3. `data`: `js_typedarray_expect(ctx, argv[1], js_ort_types[t].array, &view)`; it throws `TypeError("expected a
-   Float32Array")` and applies the byte offset. `view.ptr`/`view.len` (bytes) go to ORT. A zero-length array is
-   allowed (dims containing 0).
-4. `dims`: `dims = js_array_toint64(ctx, argv[2], &ndims)`; it throws `TypeError` (not an Array) or `RangeError`
-   (element negative, fractional, not a number) and returns at least one element of memory, a `dims` of length 0
-   is a scalar. Multiply with overflow check, the product must equal `view.len / size`, else `RangeError("dims do
-   not match data length: <prod> vs <len>")`. Free `dims` with `js_free` on every path.
-5. `ort_api->CreateTensorWithDataAsOrtValue(ort_cpu, ptr, bytes, dims, ndims, onnx_type, &value)`; failure goes
-   through `js_ort_throw_status`.
-6. `obj = js_object_from_target(ctx, new_target, js_ort_tensor_class_id)`, `s->data = JS_DupValue(ctx, argv[1])`,
-   `JS_SetOpaque(obj, s)`.
-7. Single `fail:` label that frees dims, releases `value`, frees `s`; written once, every error path jumps there
-   (skill section 3).
-
-The typed array's memory must not move while the tensor exists: QuickJS ArrayBuffers do not move, but they can
-be **detached** or resized; a detached buffer would leave a dangling pointer. State the limit in the doc page
-("do not transfer or resize the buffer"), and check `JS_GetArrayBuffer` returning NULL at construction. Do not
-try to guard against later detaching in the PoC.
-
-Finalizer `js_ort_tensor_finalizer(JSRuntime*, JSValue)`: `JS_GetOpaque`, NULL tolerated, `ReleaseValue`,
-`JS_FreeValueRT(rt, s->data)`, `js_free_rt`. Order matters for an input tensor: the OrtValue does not own the
-data, so release the value first, then drop the array. `gc_mark` marks `s->data` with `JS_MarkValue`.
-
-Getters (`JS_CGETSET_MAGIC_DEF` or plain `JS_CGETSET_DEF`, all read-only):
-
-- `type`: `JS_NewString(js_ort_types[s->type].name)`.
-- `dims`: `ort_api->GetTensorTypeAndShape(value, &info)`, `GetDimensionsCount`, `GetDimensions` into a stack or
-  `js_malloc`ed `int64_t[]`, build a plain `Array` of `JS_NewInt64`, always `ReleaseTensorTypeAndShapeInfo(info)`
-  (also on the error path; one `goto done`).
-- `data`: input tensor: `JS_DupValue(ctx, s->data)`. Output tensor (`s->data` undefined): see task 3, it is
-  written there; in task 1 return `JS_UNDEFINED` for that case with a `/* task 3 */` comment, not a guess.
-- `Symbol.toStringTag` `"Tensor"` (`JS_PROP_STRING_DEF("[Symbol.toStringTag]", "Tensor", JS_PROP_CONFIGURABLE)`).
-
-Add `Tensor` to the module exports (`JS_AddModuleExport(ctx, m, "Tensor")` in the init function, and
-`JS_SetModuleExport` of the constructor in `js_ort_init`; both names must match). Class registration happens in
-`js_ort_init`, not in the exported-names function (`js_class_register(ctx, &js_ort_tensor_class_id, &def, js_ort_tensor_ctor, 3, funcs, countof(funcs))`,
-the result is the constructor to export).
-
-Also export a second helper for task 3, `static JSValue js_ort_tensor_wrap(JSContext*, OrtValue*)`: makes an
-output tensor object that **takes ownership** of an `OrtValue` (type read from `GetTensorTypeAndShape` +
-`GetTensorElementType`; a type that is not in the table throws `TypeError("unsupported element type N")` and
-releases the value), uses `JS_GetClassProto` for the prototype (`JS_NewObjectProtoClass`, free the proto reference). Write it now, it shares the struct with the
-constructor.
-
-Verify: construct with a `Float32Array(6)` and `[2, 3]`, check `type`, `dims`, `data === the same array`; dims
-`[2, 2]` throws `RangeError`; `new Tensor('float32', new Int32Array(4), [4])` and `new Tensor('int7', ...)` throw
-`TypeError`; a subclass `class T extends Tensor {}` works; 25000 rounds of constructing and dropping keep the
-`qjsm -d` counts equal; `Object.prototype.toString.call(t)` is `[object Tensor]`.
+(Task 1, the float32 `Tensor`, is done: see the ChangeLog. Its output-tensor `data` getter returns `undefined` until task 3.)
 
 ### 2. `Session`, minimal
 

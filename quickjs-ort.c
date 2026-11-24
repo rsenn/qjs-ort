@@ -4,6 +4,313 @@
 #include <quickjs.h>
 #include <cutils.h>
 #include <onnxruntime_c_api.h>
+#include "js-utils.h"
+
+static const OrtApi* ort_api;      /* OrtGetApiBase()->GetApi(ORT_API_VERSION), NULL: library too old */
+static OrtEnv* ort_env;            /* CreateEnv(ORT_LOGGING_LEVEL_WARNING, "qjs-ort", &ort_env) */
+static OrtMemoryInfo* ort_cpu;     /* CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &ort_cpu) */
+
+static const struct { const char* name; ONNXTensorElementDataType onnx; size_t size; JSTypedArrayEnum array; }
+js_ort_types[] = {
+  { "float32", ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, 4, JS_TYPED_ARRAY_FLOAT32 },
+  /* { "float64", ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE, 8, JS_TYPED_ARRAY_FLOAT64 }, */
+  /* { "int32", ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32, 4, JS_TYPED_ARRAY_INT32 }, */
+  /* { "int64", ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64, 8, JS_TYPED_ARRAY_BIG_INT64 }, */
+  /* { "uint8", ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8, 1, JS_TYPED_ARRAY_UINT8 }, */
+  /* { "bool", ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL, 1, JS_TYPED_ARRAY_UINT8 }, */
+};
+
+static int js_ort_type_by_name(const char* name) {
+  for(size_t i = 0; i < countof(js_ort_types); i++)
+    if(!strcmp(name, js_ort_types[i].name))
+      return i;
+  return -1;
+}
+
+static int js_ort_type_by_onnx(ONNXTensorElementDataType onnx) {
+  for(size_t i = 0; i < countof(js_ort_types); i++)
+    if(js_ort_types[i].onnx == onnx)
+      return i;
+  return -1;
+}
+
+typedef struct {
+  OrtValue* value;     /* owned, released in the finalizer */
+  int type;            /* index into js_ort_types */
+  JSValue data;        /* input tensor: the typed array, owned (JS_DupValue); output tensor: JS_UNDEFINED */
+} JSOrtTensor;
+
+static JSClassID js_ort_tensor_class_id;
+
+static JSValue js_ort_throw_status(JSContext* ctx, OrtStatus* status);
+
+/* the env and memory info live until the process ends; a module has no unload hook */
+static int
+js_ort_init_api(JSContext* ctx) {
+  OrtStatus* status;
+
+  if(ort_api)
+    return 0;
+
+  if(!(ort_api = OrtGetApiBase()->GetApi(ORT_API_VERSION))) {
+    JS_ThrowTypeError(ctx, "onnxruntime library too old, need API version %d", ORT_API_VERSION);
+    return -1;
+  }
+
+  if((status = ort_api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "qjs-ort", &ort_env))) {
+    js_ort_throw_status(ctx, status);
+    return -1;
+  }
+
+  if((status = ort_api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &ort_cpu))) {
+    js_ort_throw_status(ctx, status);
+    return -1;
+  }
+
+  return 0;
+}
+
+static JSValue
+js_ort_throw_status(JSContext* ctx, OrtStatus* status) {
+  const char* msg = ort_api->GetErrorMessage(status);
+  OrtErrorCode code = ort_api->GetErrorCode(status);
+  JSValue err = JS_NewError(ctx);
+
+  JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, msg), JS_PROP_C_W_E);
+  JS_DefinePropertyValueStr(ctx, err, "code", JS_NewInt32(ctx, code), JS_PROP_C_W_E);
+  ort_api->ReleaseStatus(status);
+  return JS_Throw(ctx, err);
+}
+
+static void js_ort_tensor_finalizer(JSRuntime* rt, JSValue val) {
+  JSOrtTensor* s = JS_GetOpaque(val, js_ort_tensor_class_id);
+  if(!s)
+    return;
+
+  if(s->value)
+    ort_api->ReleaseValue(s->value);
+
+  if(!JS_IsUndefined(s->data))
+    JS_FreeValueRT(rt, s->data);
+
+  js_free_rt(rt, s);
+}
+
+static void js_ort_tensor_gc_mark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func) {
+  JSOrtTensor* s = JS_GetOpaque(val, js_ort_tensor_class_id);
+  if(s && !JS_IsUndefined(s->data))
+    JS_MarkValue(rt, s->data, mark_func);
+}
+
+static JSValue
+js_ort_tensor_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst argv[]) {
+  const char* type_name = NULL;
+  int type;
+  BufferView view;
+  size_t ndims;
+  int64_t* dims = NULL;
+  size_t elem_size;
+  size_t total = 1;
+  OrtValue* value = NULL;
+  OrtStatus* status = NULL;
+  JSValue obj;
+  JSValue err;
+  JSOrtTensor* s;
+
+  if(js_ort_init_api(ctx))
+    return JS_EXCEPTION;
+
+  if(argc < 3)
+    return JS_ThrowTypeError(ctx, "Tensor needs type, data and dims");
+
+  if(!(type_name = JS_ToCString(ctx, argv[0])))
+    return JS_EXCEPTION;
+
+  type = js_ort_type_by_name(type_name);
+  if(type < 0) {
+    err = JS_ThrowTypeError(ctx, "unknown tensor type '%s'", type_name);
+    JS_FreeCString(ctx, type_name);
+    return err;
+  }
+
+  JS_FreeCString(ctx, type_name);
+
+  if(js_typedarray_expect(ctx, argv[1], js_ort_types[type].array, &view) < 0)
+    return JS_EXCEPTION;
+
+  dims = js_array_toint64(ctx, argv[2], &ndims);
+  if(!dims)
+    return JS_EXCEPTION;
+
+  elem_size = js_ort_types[type].size;
+
+  for(size_t i = 0; i < ndims; i++) {
+    if(dims[i] == 0) {
+      total = 0;
+    } else if(total > SIZE_MAX / (size_t)dims[i]) {
+      js_free(ctx, dims);
+      return JS_ThrowRangeError(ctx, "dims overflow");
+    } else {
+      total *= (size_t)dims[i];
+    }
+  }
+
+  if(total * elem_size != view.len) {
+    js_free(ctx, dims);
+    return JS_ThrowRangeError(ctx, "dims do not match data length: %zu vs %zu", total * elem_size, view.len);
+  }
+
+  status = ort_api->CreateTensorWithDataAsOrtValue(ort_cpu, view.ptr, view.len, dims, ndims,
+                                                    js_ort_types[type].onnx, &value);
+  if(status) {
+    js_free(ctx, dims);
+    return js_ort_throw_status(ctx, status);
+  }
+
+  js_free(ctx, dims);
+
+  obj = js_object_from_target(ctx, new_target, js_ort_tensor_class_id);
+  if(JS_IsException(obj)) {
+    ort_api->ReleaseValue(value);
+    return JS_EXCEPTION;
+  }
+
+  s = js_mallocz(ctx, sizeof(*s));
+  if(!s) {
+    ort_api->ReleaseValue(value);
+    return JS_ThrowOutOfMemory(ctx);
+  }
+
+  s->value = value;
+  s->type = type;
+  s->data = JS_DupValue(ctx, argv[1]);
+  JS_SetOpaque(obj, s);
+  return obj;
+}
+
+static JSValue js_ort_tensor_get_type(JSContext* ctx, JSValueConst this_val) {
+  JSOrtTensor* s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id);
+  if(!s)
+    return JS_EXCEPTION;
+  return JS_NewString(ctx, js_ort_types[s->type].name);
+}
+
+static JSValue
+js_ort_tensor_get_dims(JSContext* ctx, JSValueConst this_val) {
+  JSOrtTensor* s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id);
+  OrtTensorTypeAndShapeInfo* info = NULL;
+  OrtStatus* status = NULL;
+  size_t count = 0;
+  JSValue arr;
+  int64_t* dims = NULL;
+
+  if(!s)
+    return JS_EXCEPTION;
+
+  if((status = ort_api->GetTensorTypeAndShape(s->value, &info)))
+    return js_ort_throw_status(ctx, status);
+
+  if((status = ort_api->GetDimensionsCount(info, &count))) {
+    ort_api->ReleaseTensorTypeAndShapeInfo(info);
+    return js_ort_throw_status(ctx, status);
+  }
+
+  arr = JS_NewArray(ctx);
+  if(!JS_IsException(arr)) {
+    dims = js_malloc(ctx, count * sizeof(int64_t));
+    if(dims) {
+      if((status = ort_api->GetDimensions(info, dims, count))) {
+        JS_FreeValue(ctx, arr);
+        arr = js_ort_throw_status(ctx, status);
+      } else {
+        for(int64_t i = 0; i < count; i++)
+          JS_SetPropertyUint32(ctx, arr, i, JS_NewInt64(ctx, dims[i]));
+      }
+
+      js_free(ctx, dims);
+    } else {
+      JS_FreeValue(ctx, arr);
+      arr = JS_ThrowOutOfMemory(ctx);
+    }
+  }
+
+  ort_api->ReleaseTensorTypeAndShapeInfo(info);
+  return arr;
+}
+
+static JSValue js_ort_tensor_get_data(JSContext* ctx, JSValueConst this_val) {
+  JSOrtTensor* s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id);
+  if(!s)
+    return JS_EXCEPTION;
+
+  if(!JS_IsUndefined(s->data))
+    return JS_DupValue(ctx, s->data);
+
+  /* task 3: output tensor data view */
+  return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry js_ort_tensor_proto_funcs[] = {
+  JS_CGETSET_DEF("type", js_ort_tensor_get_type, NULL),
+  JS_CGETSET_DEF("dims", js_ort_tensor_get_dims, NULL),
+  JS_CGETSET_DEF("data", js_ort_tensor_get_data, NULL),
+  JS_PROP_STRING_DEF("[Symbol.toStringTag]", "Tensor", JS_PROP_CONFIGURABLE),
+};
+
+static JSClassDef js_ort_tensor_class = {
+  .class_name = "Tensor",
+  .finalizer = js_ort_tensor_finalizer,
+  .gc_mark = js_ort_tensor_gc_mark,
+};
+
+static JSValue
+js_ort_tensor_wrap(JSContext* ctx, OrtValue* value) {
+  OrtTensorTypeAndShapeInfo* info = NULL;
+  OrtStatus* status = NULL;
+  ONNXTensorElementDataType onnx_type;
+  int type;
+  JSValue proto;
+  JSValue obj;
+  JSOrtTensor* s;
+
+  if((status = ort_api->GetTensorTypeAndShape(value, &info)))
+    return js_ort_throw_status(ctx, status);
+
+  if((status = ort_api->GetTensorElementType(info, &onnx_type))) {
+    ort_api->ReleaseTensorTypeAndShapeInfo(info);
+    return js_ort_throw_status(ctx, status);
+  }
+
+  type = js_ort_type_by_onnx(onnx_type);
+  if(type < 0) {
+    ort_api->ReleaseTensorTypeAndShapeInfo(info);
+    ort_api->ReleaseValue(value);
+    return JS_ThrowTypeError(ctx, "unsupported element type %d", onnx_type);
+  }
+
+  proto = JS_GetClassProto(ctx, js_ort_tensor_class_id);
+  obj = JS_NewObjectProtoClass(ctx, proto, js_ort_tensor_class_id);
+  JS_FreeValue(ctx, proto);
+  if(JS_IsException(obj)) {
+    ort_api->ReleaseTensorTypeAndShapeInfo(info);
+    ort_api->ReleaseValue(value);
+    return JS_EXCEPTION;
+  }
+
+  s = js_mallocz(ctx, sizeof(*s));
+  if(!s) {
+    ort_api->ReleaseTensorTypeAndShapeInfo(info);
+    ort_api->ReleaseValue(value);
+    return JS_ThrowOutOfMemory(ctx);
+  }
+
+  s->value = value;
+  s->type = type;
+  s->data = JS_UNDEFINED;
+  JS_SetOpaque(obj, s);
+  ort_api->ReleaseTensorTypeAndShapeInfo(info);
+  return obj;
+}
 
 #ifdef JS_SHARED_LIBRARY
 #if defined(_WIN32) || defined(__MINGW32__)
@@ -24,6 +331,15 @@ js_ort_version(JSContext* ctx) {
 
 static int
 js_ort_init(JSContext* ctx, JSModuleDef* m) {
+  JSValue ctor = js_class_register(ctx, &js_ort_tensor_class_id, &js_ort_tensor_class,
+                                    js_ort_tensor_ctor, 3,
+                                    js_ort_tensor_proto_funcs, countof(js_ort_tensor_proto_funcs));
+  if(JS_IsException(ctor))
+    return -1;
+
+  if(JS_SetModuleExport(ctx, m, "Tensor", ctor) < 0)
+    return -1;
+
   return JS_SetModuleExport(ctx, m, "version", js_ort_version(ctx));
 }
 
@@ -35,5 +351,7 @@ JS_INIT_MODULE(JSContext* ctx, const char* module_name) {
     return NULL;
 
   JS_AddModuleExport(ctx, m, "version");
+  JS_AddModuleExport(ctx, m, "Tensor");
+
   return m;
 }

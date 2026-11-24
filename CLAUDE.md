@@ -57,6 +57,23 @@ CMake layout). Match the neighbours: `~/Sources/quickjs/qjs-nanovg` is the lean 
 - Comments follow the `comment-style` skill; C formatting follows `.clang-format` once one is added
   (copy it from qjs-nanovg).
 
+## C style
+
+Apply to every new or changed C line. The quickjs-native-bindings skill has the base rules, these are the
+project's own and win where they differ.
+
+- **Declarations come first.** Every variable is declared at the beginning of the block scope it lives in,
+  before the first statement of that block. Never declare in the middle of a block, not even right before the
+  first use. The one exception is the loop variable of a `for(` header. A value that is known at the top is
+  initialised in its declaration.
+- **Fold an assignment into the test** when the assigned value is only used for that test or right after it:
+  the call is the condition, wrapped in its own parentheses, so a status, a pointer or a lookup result is never
+  assigned on one line and tested on the next. Keep the unfolded form only where the folded line would be hard
+  to read.
+- **A closing brace of an inner block is followed by an empty line.** This holds for every block that closes
+  inside a function: `if`, `for`, `while`, `switch`, a plain block. It does not hold when the next token
+  continues the same statement (`else`, the `while` of a `do`) or closes the enclosing block.
+
 ## Git commits
 
 Do not add the `Co-Authored-By:` or `Claude-Session:` trailers (or any other attribution lines) to commit

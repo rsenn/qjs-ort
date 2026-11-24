@@ -84,3 +84,34 @@
 	found by the self-test: JS_NewTypedArray with one argument gives a
 	length 0 array for an ArrayBuffer, JS_GetTypedArrayBuffer rejects a
 	DataView.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	C style rules recorded.
+
+	* CLAUDE.md (C style):
+	New section, written as general rules without code examples. All
+	variables are declared at the beginning of their block scope, an
+	assignment used only for a test is folded into the test, and an
+	empty line follows the closing brace of an inner block.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	Tensor class, float32 only (PoC task 1), written by the nemotron
+	harness session and reviewed.
+
+	* quickjs-ort.c (js_ort_init_api, js_ort_throw_status,
+	js_ort_tensor_ctor, js_ort_tensor_finalizer, js_ort_tensor_gc_mark,
+	js_ort_tensor_get_type, js_ort_tensor_get_dims,
+	js_ort_tensor_get_data, js_ort_tensor_wrap, js_ort_init):
+	New. Tensor(type, data, dims) over a Float32Array without copying,
+	getters type, dims and data, Symbol.toStringTag, subclassable. ORT
+	errors become Error objects with the ORT message and a code. The
+	data getter of an output tensor is still undefined (task 3).
+
+	* tests/tensor-test.js:
+	New. Constructor, getters, bad type, bad dims, zero dims, subclass,
+	scalar.
+
+	* TODO.md:
+	Task 1 deleted.
