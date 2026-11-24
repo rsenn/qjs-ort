@@ -62,13 +62,7 @@ Facts verified against this tree, so you do not have to rediscover them:
 
 ## Next, in this order
 
-1. **Install rpath (found 2026-11-24)**: the `ort.so` the stack installs into `/usr/local/lib/x86_64-linux-gnu/quickjs`
-   cannot load (`libonnxruntime.so.1 => not found`), because only the build tree has an rpath. Set `INSTALL_RPATH`
-   (the directory of `ORT_LIBRARY`, or install the ONNX Runtime libraries next to the module), then check
-   `ldd` of the installed file and `import 'ort'` without `QUICKJS_MODULE_PATH`.
-
-
-2. **Tests without a download**: `tests/ort-test.js` builds a tiny ONNX model (an Add or MatMul graph written as
+1. **Tests without a download**: `tests/ort-test.js` builds a tiny ONNX model (an Add or MatMul graph written as
   protobuf bytes by hand) and checks `run` against known numbers, plus the bad-input cases of tasks 1 to 3 as
   permanent tests; tinytest style if the tree has `tinytest.js` (ask before adding it).
 - **Rest of the Tensor/Session surface** from `doc/native/ort.md`: element types float64/int32/int64/uint8/bool,

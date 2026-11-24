@@ -32,6 +32,26 @@ set(ort_LIBRARIES ${ORT_LIBRARY})
 
 make_module(ort quickjs-ort.c js-utils.c js-utils.h)
 
+# A vendored or prefixed ONNX Runtime is not on the loader's path. ort.so has the module directory in
+# its RUNPATH, so the libraries go next to it. A system copy needs nothing.
+if(ORT_PREFIX OR ORT_LIBRARY_DIR MATCHES "^${CMAKE_CURRENT_SOURCE_DIR}/third_party/")
+  set(_ort_install_default ON)
+else()
+  set(_ort_install_default OFF)
+endif()
+option(INSTALL_ORT_LIBRARY "Install the ONNX Runtime libraries next to ort.so" ${_ort_install_default})
+
+if(INSTALL_ORT_LIBRARY AND BUILD_SHARED)
+  file(GLOB _ort_libs "${ORT_LIBRARY_DIR}/libonnxruntime.so.[0-9]*" "${ORT_LIBRARY_DIR}/libonnxruntime_providers_shared.so")
+
+  # install(FILES) keeps a symlink as a symlink: install the file it points to under the name the loader looks for
+  foreach(_ort_lib ${_ort_libs})
+    get_filename_component(_ort_name "${_ort_lib}" NAME)
+    get_filename_component(_ort_real "${_ort_lib}" REALPATH)
+    install(FILES "${_ort_real}" DESTINATION "${QUICKJS_C_MODULE_DIR}" RENAME "${_ort_name}")
+  endforeach(_ort_lib)
+endif(INSTALL_ORT_LIBRARY AND BUILD_SHARED)
+
 foreach(_t qjs-ort qjs-ort-static)
   if(TARGET ${_t})
     # find libonnxruntime.so.1 next to a relocated install and in the build tree

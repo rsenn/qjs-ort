@@ -232,3 +232,20 @@
 	* TODO.md:
 	Rewritten as a status page: PoC reached, the install rpath of the
 	installed ort.so first, the later list after it.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	The installed ort.so can find ONNX Runtime.
+
+	* CMakeLists.txt:
+	New option INSTALL_ORT_LIBRARY, on by default when ONNX Runtime comes
+	from third_party/ or ORT_PREFIX. Install rules put
+	libonnxruntime.so.1 (the real file, not the symlink) and
+	libonnxruntime_providers_shared.so into the C module directory, which
+	is already in the RUNPATH of ort.so. A system copy of ONNX Runtime
+	needs nothing. Checked with a DESTDIR install: the loader resolves
+	libonnxruntime.so.1 there, and tests/u2netp-poc.js passes from that
+	tree (max abs difference 7.6e-5).
+
+	* CLAUDE.md (Build & run), TODO.md:
+	Notes updated, the install rpath item is done.

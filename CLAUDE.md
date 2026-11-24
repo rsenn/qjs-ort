@@ -25,8 +25,10 @@ QUICKJS_MODULE_PATH=build/x86_64-linux-debug qjsm tests/session-test.js     # qj
 QUICKJS_MODULE_PATH="build/x86_64-linux-debug;/usr/local/lib/x86_64-linux-gnu/quickjs" qjsm tests/u2netp-poc.js
 ```
 
-The installed `ort.so` in `/usr/local/lib/x86_64-linux-gnu/quickjs` cannot find `libonnxruntime.so.1` (no
-install rpath yet, see `TODO.md`): always put the build directory first in `QUICKJS_MODULE_PATH`. Never run
+`cmake --install` puts `libonnxruntime.so.1` and the providers library next to `ort.so` (vendored or prefixed
+ONNX Runtime only, `-DINSTALL_ORT_LIBRARY=OFF` skips it), where its RUNPATH finds them. An `ort.so` installed
+before that change still cannot load (`libonnxruntime.so.1 => not found`): reinstall, or put the build directory
+first in `QUICKJS_MODULE_PATH`. Never run
 `qjsm` with `-d`, it opens an interactive shell; `qjsm --dump script.js < /dev/null` prints the memory counts.
 
 Use the `quickjs-native-bindings` skill for any C code here (class registration, ownership, finalizers,
