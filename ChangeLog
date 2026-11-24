@@ -321,3 +321,64 @@
 
 	* doc/native/ort.md, TODO.md:
 	Session constructor and options documented, TODO item trimmed.
+
+2026-11-25  Roman Senn  <roman.l.senn@gmail.com>
+
+	session.inputs and session.outputs getters.
+
+	* quickjs-ort.c (js_ort_session_io_info_one,
+	js_ort_session_io_info):
+	New. SessionGetInputTypeInfo / SessionGetOutputTypeInfo returns an
+	OrtTypeInfo* that is released on every path with ReleaseTypeInfo.
+	CastTypeInfoToTensorInfo gives a const OrtTensorTypeAndShapeInfo*
+	owned by the type info (not released); it is NULL with OK status when
+	the value is not a tensor. GetDimensionsCount and GetDimensions fill
+	a js_malloc'ed int64_t array that is js_free'd on every path. The
+	element type comes from js_ort_types via js_ort_type_by_onnx, or is
+	undefined when the type is not in the table (string, float16, ...)
+	or the value is not a tensor. A dynamic dimension is -1, a scalar
+	is [], non-tensor dims is undefined. A new Array is created each
+	read. magic 0 = inputs, 1 = outputs. Released session throws
+	Error('session released'); inputNames and outputNames keep working.
+
+	* quickjs-ort.c (js_ort_session_proto_funcs):
+	Add JS_CGETSET_MAGIC_DEF for "inputs" and "outputs" with magic 0
+	and 1.
+
+	* quickjs-ort.c (js_ort_throw_released):
+	New, the Error of a released session, used by run and by the two
+	getters.
+
+	The first version from the nemotron harness read the session before
+	it was assigned (segmentation fault), released the tensor info that
+	belongs to the type info and used it after the type info was gone,
+	and released the type info twice on error paths. js_ort_session_io_info_one
+	was rewritten: everything is read while the type info lives and it is
+	released exactly once. 100000 reads of inputs and outputs keep the
+	resident size flat. The test builder wrote empty dimensions (a message
+	wrapped twice) and wrong expected values, and skipped the float16 and
+	string cases through an undefined variable, all fixed.
+
+	* tests/session-info-test.js:
+	New. Builds models as protobuf bytes (helpers from ort-test.js, plus
+	a Dimension with dim_param for dynamic dims). makeModel(elemType,
+	dimsSpec, opType) where dimsSpec is numbers or strings. Checks: Add
+	float32 with ['N', 3] reports [-1, 3] and runs with [2, 3]; int64
+	with [4] reports type int64; float16 and string report type
+	undefined with dims [2] (loaded if ORT accepts them on this machine);
+	scalar reports dims []; two reads give different Arrays with equal
+	content, mutation does not affect the other; after release inputs
+	and outputs throw 'session released' while inputNames works; 3000
+	reads then final check.
+
+	* doc/native/ort.md (Session table):
+	Move session.inputs and session.outputs from Planned to Session with
+	semantics: type undefined for unnamed element type or non-tensor,
+	dims undefined for non-tensor, dynamic dimension -1.
+
+	* doc/native/ort.md (Planned table):
+	Remove the inputs/outputs line.
+
+	* TODO.md (item 1):
+	Delete the words "inputs/outputs (name, element type, dims)", keep
+	wrapped at about 120 columns.

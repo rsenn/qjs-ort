@@ -718,6 +718,132 @@ js_ort_session_get_output_names(JSContext* ctx, JSValueConst this_val) {
   return arr;
 }
 
+/* throws the Error of a session whose native part was released */
+static JSValue
+js_ort_throw_released(JSContext* ctx) {
+  JSValue err = JS_NewError(ctx);
+
+  JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, "session released"), JS_PROP_C_W_E);
+  return JS_Throw(ctx, err);
+}
+
+/*
+ * makes the { name, type, dims } object of one input or output.
+ *
+ * the tensor info of CastTypeInfoToTensorInfo belongs to the type info, so
+ * everything is read while the type info lives and it is released once,
+ * at the end or on failure.
+ */
+static JSValue
+js_ort_session_io_info_one(JSContext* ctx, JSOrtSession* s, size_t idx, int is_output) {
+  const OrtTensorTypeAndShapeInfo* info = NULL;
+  ONNXTensorElementDataType elem_type;
+  OrtTypeInfo* type_info = NULL;
+  OrtStatus* status;
+  JSValue obj, val;
+  int64_t* dims = NULL;
+  size_t count = 0;
+  int type;
+
+  if((status = is_output ? ort_api->SessionGetOutputTypeInfo(s->session, idx, &type_info) : ort_api->SessionGetInputTypeInfo(s->session, idx, &type_info)))
+    return js_ort_throw_status(ctx, status);
+
+  if((status = ort_api->CastTypeInfoToTensorInfo(type_info, &info))) {
+    ort_api->ReleaseTypeInfo(type_info);
+    return js_ort_throw_status(ctx, status);
+  }
+
+  if(JS_IsException(obj = JS_NewObject(ctx))) {
+    ort_api->ReleaseTypeInfo(type_info);
+    return obj;
+  }
+
+  /* JS_SetPropertyStr takes the value, also when it fails */
+  if(JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, is_output ? s->output_names[idx] : s->input_names[idx])) < 0)
+    goto fail;
+
+  /* not a tensor: type and dims stay undefined */
+  if(!info) {
+    if(JS_SetPropertyStr(ctx, obj, "type", JS_UNDEFINED) < 0 || JS_SetPropertyStr(ctx, obj, "dims", JS_UNDEFINED) < 0)
+      goto fail;
+
+    goto done;
+  }
+
+  if((status = ort_api->GetTensorElementType(info, &elem_type)) || (status = ort_api->GetDimensionsCount(info, &count))) {
+    js_ort_throw_status(ctx, status);
+    goto fail;
+  }
+
+  type = js_ort_type_by_onnx(elem_type);
+  val = type < 0 ? JS_UNDEFINED : JS_NewString(ctx, js_ort_types[type].name);
+
+  if(JS_IsException(val))
+    goto fail;
+
+  if(JS_SetPropertyStr(ctx, obj, "type", val) < 0)
+    goto fail;
+
+  /* at least one element, so that a scalar does not ask for zero bytes */
+  if(!(dims = js_malloc(ctx, (count ? count : 1) * sizeof(int64_t))))
+    goto fail;
+
+  if((status = ort_api->GetDimensions(info, dims, count))) {
+    js_ort_throw_status(ctx, status);
+    goto fail;
+  }
+
+  if(JS_IsException(val = JS_NewArray(ctx)))
+    goto fail;
+
+  for(size_t i = 0; i < count; i++)
+    JS_SetPropertyUint32(ctx, val, i, JS_NewInt64(ctx, dims[i]));
+
+  if(JS_SetPropertyStr(ctx, obj, "dims", val) < 0)
+    goto fail;
+
+done:
+  js_free(ctx, dims);
+  ort_api->ReleaseTypeInfo(type_info);
+  return obj;
+
+fail:
+  js_free(ctx, dims);
+  ort_api->ReleaseTypeInfo(type_info);
+  JS_FreeValue(ctx, obj);
+  return JS_EXCEPTION;
+}
+
+/* getter for session.inputs (magic 0) and session.outputs (magic 1) */
+static JSValue
+js_ort_session_io_info(JSContext* ctx, JSValueConst this_val, int magic) {
+  JSOrtSession* s;
+  JSValue arr, item;
+  size_t n;
+
+  if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id)))
+    return JS_EXCEPTION;
+
+  if(!s->session)
+    return js_ort_throw_released(ctx);
+
+  if(JS_IsException(arr = JS_NewArray(ctx)))
+    return arr;
+
+  n = magic ? s->n_outputs : s->n_inputs;
+
+  for(size_t i = 0; i < n; i++) {
+    if(JS_IsException(item = js_ort_session_io_info_one(ctx, s, i, magic))) {
+      JS_FreeValue(ctx, arr);
+      return JS_EXCEPTION;
+    }
+
+    JS_SetPropertyUint32(ctx, arr, i, item);
+  }
+
+  return arr;
+}
+
 static JSValue
 js_ort_session_release(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst argv[]) {
   JSOrtSession* s;
@@ -749,12 +875,8 @@ js_ort_session_run(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
   if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id)))
     return JS_EXCEPTION;
 
-  if(!s->session) {
-    JSValue err = JS_NewError(ctx);
-
-    JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, "session released"), JS_PROP_C_W_E);
-    return JS_Throw(ctx, err);
-  }
+  if(!s->session)
+    return js_ort_throw_released(ctx);
 
   if(argc < 1 || !JS_IsObject(argv[0]))
     return JS_ThrowTypeError(ctx, "run needs an object of input tensors");
@@ -915,6 +1037,8 @@ done:
 static const JSCFunctionListEntry js_ort_session_proto_funcs[] = {
   JS_CGETSET_DEF("inputNames", js_ort_session_get_input_names, NULL),
   JS_CGETSET_DEF("outputNames", js_ort_session_get_output_names, NULL),
+  JS_CGETSET_MAGIC_DEF("inputs", js_ort_session_io_info, NULL, 0),
+  JS_CGETSET_MAGIC_DEF("outputs", js_ort_session_io_info, NULL, 1),
   JS_CFUNC_DEF("run", 1, js_ort_session_run),
   JS_CFUNC_DEF("release", 0, js_ort_session_release),
   JS_PROP_STRING_DEF("[Symbol.toStringTag]", "Session", JS_PROP_CONFIGURABLE),

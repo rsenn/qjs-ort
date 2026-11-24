@@ -63,7 +63,7 @@ Facts verified against this tree, so you do not have to rediscover them:
 ## Next, in this order
 
 1. **Rest of the Tensor/Session surface** from `doc/native/ort.md`: element type string, float16 later;
-  `options.providers` for `Session`; `inputs`/`outputs` (name, element type, dims); `ort.providers`; wide paths
+  `options.providers` for `Session`; `ort.providers`; wide paths
   on Windows.
 2. **FindONNXRuntime, rest**: let CMake call `tools/fetch-onnxruntime.sh` itself when nothing is found
   (`BUILD_ORT`-style option), the aarch64 and Termux variants (`fetch-onnxruntime.sh VERSION linux-arm64`,

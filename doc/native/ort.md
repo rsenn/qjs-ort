@@ -58,8 +58,10 @@ const session = new Session('u2netp.onnx');
 | `new Session(pathOrBuffer, options?)` | Loads the model from a file path (string) or from an `ArrayBuffer` or typed array holding the model bytes (not copied, the array may change afterwards). Throws `Error` (with `.code`, see Errors) when the file is missing or the bytes are not a model, `TypeError` for any other first argument. |
 | `session.inputNames` | `Array` of strings, in model order. |
 | `session.outputNames` | `Array` of strings, in model order. |
+| `session.inputs` | `Array` of objects `{ name, type, dims }` in model order, one per input. `name` is the input name string. `type` is the element type name from the known type table, or `undefined` when the element type has no row in the table (e.g. `string`, `float16`, ...) or the value is not a tensor (a sequence or a map). `dims` is an `Array` of numbers, a dynamic dimension is `-1` as ONNX Runtime reports it, a scalar is `[]`; `undefined` when the value is not a tensor. A new `Array` is returned each time the property is read. |
+| `session.outputs` | `Array` of objects `{ name, type, dims }` in model order, one per output. Same semantics as `inputs`. |
 | `session.run(feeds, outputNames?)` | Runs the model, synchronously. `feeds` is an object, input name to `Tensor`; every model input must be present, no others. `outputNames` is an array of output names, default all. Returns an object, output name to `Tensor`. |
-| `session.release()` | Frees the native session now. Later `run()` throws `Error('session released')`; calling `release()` twice is fine. Without it the garbage collector frees the session. |
+| `session.release()` | Frees the native session now. Later `run()`, `inputs` and `outputs` throw `Error('session released')`; calling `release()` twice is fine. Without it the garbage collector frees the session. `inputNames` and `outputNames` keep working after release. |
 | `session[Symbol.toStringTag]` | `'Session'`. |
 
 ```js
@@ -81,7 +83,6 @@ Planned (not PoC):
 
 | Member | |
 |---|---|
-| `session.inputs`, `session.outputs` | Arrays of `{ name, type, dims }`; a dynamic dimension is `-1`, an unnamed element type `undefined`. |
 | `options.providers` | Array of provider names or `{ name, ...providerOptions }`, tried in order: `'cpu'`, `'xnnpack'`, `'nnapi'`, `'cuda'`. |
 | `session.runAsync(feeds, outputNames?)` | `Promise` version, the model runs on a worker thread; ORT never calls into JS. |
 
