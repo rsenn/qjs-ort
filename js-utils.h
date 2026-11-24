@@ -2,9 +2,8 @@
  * js-utils.h - QuickJS helpers of qjs-ort: class registration, typed
  * array access without copying, views over memory the library owns.
  *
- * Taken from qjs-sound js-utils.[ch] and js-typedarray.[ch] and from
- * qjs-nanovg nvgjs-utils.[ch], cut down to what ort needs. Element kinds
- * are the JSTypedArrayEnum of quickjs.h, no private enum.
+ * element kinds are the JSTypedArrayEnum of quickjs.h, there is no
+ * private enum.
  */
 #ifndef ORT_JS_UTILS_H
 #define ORT_JS_UTILS_H
@@ -22,21 +21,21 @@ typedef struct {
 } BufferView;
 
 /*
- * Gets a global variable by name.
+ * gets a global variable by name.
  *
  * refcount: returns a new reference, undefined when there is none.
  */
 JSValue js_global_get_str(JSContext*, const char* name);
 
 /*
- * Reads the length property of an array or array-like.
+ * reads the length property of an array or array-like.
  *
  * returns the length, or -1 when length is not a number.
  */
 int64_t js_array_length(JSContext*, JSValueConst array);
 
 /*
- * Reads a JS Array of integers into a new C array.
+ * reads a JS Array of integers into a new C array.
  *
  *   JSValueConst array  Array of numbers, every one a non-negative integer
  *   size_t* plen        receives the element count
@@ -50,9 +49,9 @@ int64_t js_array_length(JSContext*, JSValueConst array);
 int64_t* js_array_toint64(JSContext*, JSValueConst array, size_t* plen);
 
 /*
- * Creates an object of class id for a constructor.
+ * creates an object of class id for a constructor.
  *
- * The prototype is new_target.prototype, so that a subclass works, else
+ * the prototype is new_target.prototype, so that a subclass works, else
  * the prototype registered for the class.
  *
  * returns the object, or JS_EXCEPTION. exception pending: the caller
@@ -61,7 +60,7 @@ int64_t* js_array_toint64(JSContext*, JSValueConst array, size_t* plen);
 JSValue js_object_from_target(JSContext*, JSValueConst new_target, JSClassID id);
 
 /*
- * Registers a native class and makes its constructor.
+ * registers a native class and makes its constructor.
  *
  *   JSClassID* id        receives a new class id
  *   JSClassDef* def      the class, def->class_name names the constructor
@@ -71,30 +70,30 @@ JSValue js_object_from_target(JSContext*, JSValueConst new_target, JSClassID id)
  *
  * returns the constructor, or JS_EXCEPTION. The prototype is registered
  * with JS_SetClassProto, so subclasses and js_object_from_target find it.
- * Same job as js_class_define of qjs-modules, without the dependency.
+ * same job as js_class_define of qjs-modules, without the dependency.
  *
  * refcount: returns a new reference to the constructor.
  */
 JSValue js_class_register(JSContext*, JSClassID* id, JSClassDef* def, JSCFunction* ctor, int length, const JSCFunctionListEntry* funcs, size_t nfuncs);
 
 /*
- * Names of a typed array kind.
+ * names of a typed array kind.
  *
  * returns Float32Array and so on, ArrayBuffer for JS_TYPEDARRAY_NONE.
  */
 const char* js_typedarray_name(int kind);
 
 /*
- * Size of one element in bytes.
+ * size of one element in bytes.
  *
  * returns 1, 2, 4 or 8, 1 for JS_TYPEDARRAY_NONE.
  */
 size_t js_typedarray_size(int kind);
 
 /*
- * Tells which typed array a value is, by class id.
+ * tells which typed array a value is, by class id.
  *
- * An Int16Array is not a Uint16Array, a subclass of Float32Array is a
+ * an Int16Array is not a Uint16Array, a subclass of Float32Array is a
  * Float32Array.
  *
  * returns a JSTypedArrayEnum, or JS_TYPEDARRAY_NONE for anything else.
@@ -102,7 +101,7 @@ size_t js_typedarray_size(int kind);
 int js_typedarray_kind(JSContext*, JSValueConst);
 
 /*
- * Resolves a TypedArray or ArrayBuffer to its bytes, no copy.
+ * resolves a TypedArray or ArrayBuffer to its bytes, no copy.
  *
  * A DataView is rejected, JS_GetTypedArrayBuffer does not take one.
  *
@@ -116,14 +115,14 @@ int js_typedarray_kind(JSContext*, JSValueConst);
 int js_typedarray_get(JSContext*, JSValueConst, BufferView* out);
 
 /*
- * Like js_typedarray_get, but only one kind is accepted.
+ * like js_typedarray_get, but only one kind is accepted.
  *
  * returns 0, or -1 with a TypeError such as expected a Float32Array.
  */
 int js_typedarray_expect(JSContext*, JSValueConst, int kind, BufferView* out);
 
 /*
- * Makes a typed array of kind over native memory, no copy.
+ * makes a typed array of kind over native memory, no copy.
  *
  *   void* ptr        the memory, count elements of kind
  *   free_func        called with opaque and ptr when the ArrayBuffer dies,
@@ -139,7 +138,7 @@ int js_typedarray_expect(JSContext*, JSValueConst, int kind, BufferView* out);
 JSValue js_typedarray_external(JSContext*, void* ptr, size_t count, int kind, JSFreeArrayBufferDataFunc* free_func, void* opaque);
 
 /*
- * Copies count elements of kind into a new typed array.
+ * copies count elements of kind into a new typed array.
  *
  * returns the typed array, or JS_EXCEPTION.
  */

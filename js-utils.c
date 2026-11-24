@@ -40,10 +40,10 @@ js_array_toint64(JSContext* ctx, JSValueConst array, size_t* plen) {
     return NULL;
 
   for(int64_t i = 0; i < len; i++) {
-    JSValue item = JS_GetPropertyUint32(ctx, array, i);
+    JSValue item;
     double d;
 
-    if(JS_IsException(item))
+    if(JS_IsException(item = JS_GetPropertyUint32(ctx, array, i)))
       goto fail;
 
     /* 2^53 - 1 is the largest integer a double holds exactly */
@@ -68,9 +68,9 @@ fail:
 
 JSValue
 js_object_from_target(JSContext* ctx, JSValueConst new_target, JSClassID id) {
-  JSValue obj, proto = JS_GetPropertyStr(ctx, new_target, "prototype");
+  JSValue obj, proto;
 
-  if(JS_IsException(proto))
+  if(JS_IsException(proto = JS_GetPropertyStr(ctx, new_target, "prototype")))
     return proto;
 
   if(!JS_IsObject(proto)) {
@@ -92,17 +92,13 @@ js_class_register(JSContext* ctx, JSClassID* id, JSClassDef* def, JSCFunction* c
   if(JS_NewClass(JS_GetRuntime(ctx), *id, def) < 0)
     return JS_EXCEPTION;
 
-  proto = JS_NewObject(ctx);
-
-  if(JS_IsException(proto))
+  if(JS_IsException(proto = JS_NewObject(ctx)))
     return proto;
 
   if(funcs)
     JS_SetPropertyFunctionList(ctx, proto, funcs, nfuncs);
 
-  func = JS_NewCFunction2(ctx, ctor, def->class_name, length, JS_CFUNC_constructor, 0);
-
-  if(JS_IsException(func)) {
+  if(JS_IsException(func = JS_NewCFunction2(ctx, ctor, def->class_name, length, JS_CFUNC_constructor, 0))) {
     JS_FreeValue(ctx, proto);
     return func;
   }
@@ -187,10 +183,10 @@ js_typedarray_kind(JSContext* ctx, JSValueConst obj) {
 int
 js_typedarray_get(JSContext* ctx, JSValueConst obj, BufferView* out) {
   size_t offset = 0, length = 0, size = 0, bpe = 0;
-  JSValue buf = JS_GetTypedArrayBuffer(ctx, obj, &offset, &length, &bpe);
+  JSValue buf;
   uint8_t* data;
 
-  if(!JS_IsException(buf)) {
+  if(!JS_IsException(buf = JS_GetTypedArrayBuffer(ctx, obj, &offset, &length, &bpe))) {
     data = JS_GetArrayBuffer(ctx, &size, buf);
     JS_FreeValue(ctx, buf);
 
@@ -280,9 +276,7 @@ js_typedarray_copy(JSContext* ctx, const void* ptr, size_t count, int kind) {
   if(count > (size_t)-1 / size)
     return JS_ThrowRangeError(ctx, "too many elements");
 
-  buf = JS_NewArrayBufferCopy(ctx, ptr, count * size);
-
-  if(JS_IsException(buf))
+  if(JS_IsException(buf = JS_NewArrayBufferCopy(ctx, ptr, count * size)))
     return buf;
 
   ret = js_typedarray_over(ctx, buf, count, kind);

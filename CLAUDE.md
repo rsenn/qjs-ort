@@ -65,7 +65,9 @@ project's own and win where they differ.
 - **Declarations come first.** Every variable is declared at the beginning of the block scope it lives in,
   before the first statement of that block. Never declare in the middle of a block, not even right before the
   first use. The one exception is the loop variable of a `for(` header. A value that is known at the top is
-  initialised in its declaration.
+  initialised in its declaration. An empty line separates the declarations of a block from its first statement.
+  A declaration whose initialiser is only tested by the very next statement is not initialised there: it is
+  declared, and the call moves into the test (next rule).
 - **Fold an assignment into the test** when the assigned value is only used for that test or right after it:
   the call is the condition, wrapped in its own parentheses, so a status, a pointer or a lookup result is never
   assigned on one line and tested on the next. Keep the unfolded form only where the folded line would be hard

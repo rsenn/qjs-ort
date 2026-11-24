@@ -54,7 +54,8 @@ static JSClassID js_ort_session_class_id;
 
 static JSValue js_ort_throw_status(JSContext* ctx, OrtStatus* status);
 
-/* the env and memory info live until the process ends; a module has no unload hook */
+/* the env and memory info live until the process ends, a module has
+ * no unload hook */
 static int
 js_ort_init_api(JSContext* ctx) {
   OrtStatus* status;
@@ -94,8 +95,9 @@ js_ort_throw_status(JSContext* ctx, OrtStatus* status) {
 
 static void
 js_ort_tensor_finalizer(JSRuntime* rt, JSValue val) {
-  JSOrtTensor* s = JS_GetOpaque(val, js_ort_tensor_class_id);
-  if(!s)
+  JSOrtTensor* s;
+
+  if(!(s = JS_GetOpaque(val, js_ort_tensor_class_id)))
     return;
 
   if(s->value)
@@ -116,8 +118,9 @@ js_ort_session_free_names(JSRuntime* rt, char** names, size_t n) {
 
 static void
 js_ort_session_finalizer(JSRuntime* rt, JSValue val) {
-  JSOrtSession* s = JS_GetOpaque(val, js_ort_session_class_id);
-  if(!s)
+  JSOrtSession* s;
+
+  if(!(s = JS_GetOpaque(val, js_ort_session_class_id)))
     return;
 
   if(s->session)
@@ -134,8 +137,9 @@ js_ort_session_finalizer(JSRuntime* rt, JSValue val) {
 
 static void
 js_ort_tensor_gc_mark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func) {
-  JSOrtTensor* s = JS_GetOpaque(val, js_ort_tensor_class_id);
-  if(s && !JS_IsUndefined(s->data))
+  JSOrtTensor* s;
+
+  if((s = JS_GetOpaque(val, js_ort_tensor_class_id)) && !JS_IsUndefined(s->data))
     JS_MarkValue(rt, s->data, mark_func);
 }
 
@@ -163,8 +167,7 @@ js_ort_tensor_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCon
   if(!(type_name = JS_ToCString(ctx, argv[0])))
     return JS_EXCEPTION;
 
-  type = js_ort_type_by_name(type_name);
-  if(type < 0) {
+  if((type = js_ort_type_by_name(type_name)) < 0) {
     err = JS_ThrowTypeError(ctx, "unknown tensor type '%s'", type_name);
     JS_FreeCString(ctx, type_name);
     return err;
@@ -175,8 +178,7 @@ js_ort_tensor_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCon
   if(js_typedarray_expect(ctx, argv[1], js_ort_types[type].array, &view) < 0)
     return JS_EXCEPTION;
 
-  dims = js_array_toint64(ctx, argv[2], &ndims);
-  if(!dims)
+  if(!(dims = js_array_toint64(ctx, argv[2], &ndims)))
     return JS_EXCEPTION;
 
   elem_size = js_ort_types[type].size;
@@ -197,23 +199,19 @@ js_ort_tensor_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCon
     return JS_ThrowRangeError(ctx, "dims do not match data length: %zu vs %zu", total * elem_size, view.len);
   }
 
-  status = ort_api->CreateTensorWithDataAsOrtValue(ort_cpu, view.ptr, view.len, dims, ndims,
-                                                    js_ort_types[type].onnx, &value);
-  if(status) {
+  if((status = ort_api->CreateTensorWithDataAsOrtValue(ort_cpu, view.ptr, view.len, dims, ndims, js_ort_types[type].onnx, &value))) {
     js_free(ctx, dims);
     return js_ort_throw_status(ctx, status);
   }
 
   js_free(ctx, dims);
 
-  obj = js_object_from_target(ctx, new_target, js_ort_tensor_class_id);
-  if(JS_IsException(obj)) {
+  if(JS_IsException(obj = js_object_from_target(ctx, new_target, js_ort_tensor_class_id))) {
     ort_api->ReleaseValue(value);
     return JS_EXCEPTION;
   }
 
-  s = js_mallocz(ctx, sizeof(*s));
-  if(!s) {
+  if(!(s = js_mallocz(ctx, sizeof(*s)))) {
     ort_api->ReleaseValue(value);
     return JS_ThrowOutOfMemory(ctx);
   }
@@ -227,22 +225,24 @@ js_ort_tensor_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCon
 
 static JSValue
 js_ort_tensor_get_type(JSContext* ctx, JSValueConst this_val) {
-  JSOrtTensor* s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id);
-  if(!s)
+  JSOrtTensor* s;
+
+  if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id)))
     return JS_EXCEPTION;
+
   return JS_NewString(ctx, js_ort_types[s->type].name);
 }
 
 static JSValue
 js_ort_tensor_get_dims(JSContext* ctx, JSValueConst this_val) {
-  JSOrtTensor* s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id);
   OrtTensorTypeAndShapeInfo* info = NULL;
   OrtStatus* status = NULL;
   size_t count = 0;
+  JSOrtTensor* s;
   JSValue arr;
   int64_t* dims = NULL;
 
-  if(!s)
+  if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id)))
     return JS_EXCEPTION;
 
   if((status = ort_api->GetTensorTypeAndShape(s->value, &info)))
@@ -253,10 +253,8 @@ js_ort_tensor_get_dims(JSContext* ctx, JSValueConst this_val) {
     return js_ort_throw_status(ctx, status);
   }
 
-  arr = JS_NewArray(ctx);
-  if(!JS_IsException(arr)) {
-    dims = js_malloc(ctx, count * sizeof(int64_t));
-    if(dims) {
+  if(!JS_IsException(arr = JS_NewArray(ctx))) {
+    if((dims = js_malloc(ctx, count * sizeof(int64_t)))) {
       if((status = ort_api->GetDimensions(info, dims, count))) {
         JS_FreeValue(ctx, arr);
         arr = js_ort_throw_status(ctx, status);
@@ -278,8 +276,9 @@ js_ort_tensor_get_dims(JSContext* ctx, JSValueConst this_val) {
 
 static JSValue
 js_ort_tensor_get_data(JSContext* ctx, JSValueConst this_val) {
-  JSOrtTensor* s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id);
-  if(!s)
+  JSOrtTensor* s;
+
+  if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id)))
     return JS_EXCEPTION;
 
   if(!JS_IsUndefined(s->data))
@@ -320,8 +319,7 @@ js_ort_tensor_wrap(JSContext* ctx, OrtValue* value) {
     return js_ort_throw_status(ctx, status);
   }
 
-  type = js_ort_type_by_onnx(onnx_type);
-  if(type < 0) {
+  if((type = js_ort_type_by_onnx(onnx_type)) < 0) {
     ort_api->ReleaseTensorTypeAndShapeInfo(info);
     ort_api->ReleaseValue(value);
     return JS_ThrowTypeError(ctx, "unsupported element type %d", onnx_type);
@@ -330,14 +328,14 @@ js_ort_tensor_wrap(JSContext* ctx, OrtValue* value) {
   proto = JS_GetClassProto(ctx, js_ort_tensor_class_id);
   obj = JS_NewObjectProtoClass(ctx, proto, js_ort_tensor_class_id);
   JS_FreeValue(ctx, proto);
+
   if(JS_IsException(obj)) {
     ort_api->ReleaseTensorTypeAndShapeInfo(info);
     ort_api->ReleaseValue(value);
     return JS_EXCEPTION;
   }
 
-  s = js_mallocz(ctx, sizeof(*s));
-  if(!s) {
+  if(!(s = js_mallocz(ctx, sizeof(*s)))) {
     ort_api->ReleaseTensorTypeAndShapeInfo(info);
     ort_api->ReleaseValue(value);
     return JS_ThrowOutOfMemory(ctx);
@@ -371,8 +369,7 @@ js_ort_session_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCo
   if(argc < 1 || !JS_IsString(argv[0]))
     return JS_ThrowTypeError(ctx, "Session needs a model path");
 
-  path = JS_ToCString(ctx, argv[0]);
-  if(!path)
+  if(!(path = JS_ToCString(ctx, argv[0])))
     return JS_EXCEPTION;
 
 #ifdef _WIN32
@@ -400,24 +397,25 @@ js_ort_session_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCo
   if((status = ort_api->SessionGetOutputCount(session, &n_outputs)))
     goto fail;
 
-  input_names = js_mallocz(ctx, n_inputs * sizeof(char*));
-  if(!input_names) {
+  if(!(input_names = js_mallocz(ctx, n_inputs * sizeof(char*)))) {
     JS_ThrowOutOfMemory(ctx);
     goto cleanup;
   }
 
-  output_names = js_mallocz(ctx, n_outputs * sizeof(char*));
-  if(!output_names) {
+  if(!(output_names = js_mallocz(ctx, n_outputs * sizeof(char*)))) {
     JS_ThrowOutOfMemory(ctx);
     goto cleanup;
   }
 
   for(size_t i = 0; i < n_inputs; i++) {
     char* name = NULL;
+
     if((status = ort_api->SessionGetInputName(session, i, alloc, &name)))
       goto fail;
+
     input_names[i] = js_strdup(ctx, name);
     alloc->Free(alloc, name);
+
     if(!input_names[i]) {
       JS_ThrowOutOfMemory(ctx);
       goto cleanup;
@@ -426,22 +424,23 @@ js_ort_session_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCo
 
   for(size_t i = 0; i < n_outputs; i++) {
     char* name = NULL;
+
     if((status = ort_api->SessionGetOutputName(session, i, alloc, &name)))
       goto fail;
+
     output_names[i] = js_strdup(ctx, name);
     alloc->Free(alloc, name);
+
     if(!output_names[i]) {
       JS_ThrowOutOfMemory(ctx);
       goto cleanup;
     }
   }
 
-  obj = js_object_from_target(ctx, new_target, js_ort_session_class_id);
-  if(JS_IsException(obj))
+  if(JS_IsException(obj = js_object_from_target(ctx, new_target, js_ort_session_class_id)))
     goto cleanup;
 
-  s = js_mallocz(ctx, sizeof(*s));
-  if(!s) {
+  if(!(s = js_mallocz(ctx, sizeof(*s)))) {
     JS_FreeValue(ctx, obj);
     JS_ThrowOutOfMemory(ctx);
     goto cleanup;
@@ -475,22 +474,23 @@ cleanup:
 
 static JSValue
 js_ort_session_get_input_names(JSContext* ctx, JSValueConst this_val) {
-  JSOrtSession* s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id);
+  JSOrtSession* s;
   JSValue arr;
 
-  if(!s)
+  if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id)))
     return JS_EXCEPTION;
 
-  arr = JS_NewArray(ctx);
-  if(JS_IsException(arr))
+  if(JS_IsException(arr = JS_NewArray(ctx)))
     return arr;
 
   for(size_t i = 0; i < s->n_inputs; i++) {
-    JSValue name = JS_NewString(ctx, s->input_names[i]);
-    if(JS_IsException(name)) {
+    JSValue name;
+
+    if(JS_IsException(name = JS_NewString(ctx, s->input_names[i]))) {
       JS_FreeValue(ctx, arr);
       return JS_EXCEPTION;
     }
+
     JS_SetPropertyUint32(ctx, arr, i, name);
   }
 
@@ -499,22 +499,23 @@ js_ort_session_get_input_names(JSContext* ctx, JSValueConst this_val) {
 
 static JSValue
 js_ort_session_get_output_names(JSContext* ctx, JSValueConst this_val) {
-  JSOrtSession* s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id);
+  JSOrtSession* s;
   JSValue arr;
 
-  if(!s)
+  if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id)))
     return JS_EXCEPTION;
 
-  arr = JS_NewArray(ctx);
-  if(JS_IsException(arr))
+  if(JS_IsException(arr = JS_NewArray(ctx)))
     return arr;
 
   for(size_t i = 0; i < s->n_outputs; i++) {
-    JSValue name = JS_NewString(ctx, s->output_names[i]);
-    if(JS_IsException(name)) {
+    JSValue name;
+
+    if(JS_IsException(name = JS_NewString(ctx, s->output_names[i]))) {
       JS_FreeValue(ctx, arr);
       return JS_EXCEPTION;
     }
+
     JS_SetPropertyUint32(ctx, arr, i, name);
   }
 
@@ -523,9 +524,9 @@ js_ort_session_get_output_names(JSContext* ctx, JSValueConst this_val) {
 
 static JSValue
 js_ort_session_release(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst argv[]) {
-  JSOrtSession* s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id);
+  JSOrtSession* s;
 
-  if(!s)
+  if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id)))
     return JS_EXCEPTION;
 
   if(s->session) {
@@ -567,19 +568,15 @@ js_ort_version(JSContext* ctx) {
 
 static int
 js_ort_init(JSContext* ctx, JSModuleDef* m) {
-  JSValue ctor = js_class_register(ctx, &js_ort_tensor_class_id, &js_ort_tensor_class,
-                                    js_ort_tensor_ctor, 3,
-                                    js_ort_tensor_proto_funcs, countof(js_ort_tensor_proto_funcs));
-  if(JS_IsException(ctor))
+  JSValue ctor;
+
+  if(JS_IsException(ctor = js_class_register(ctx, &js_ort_tensor_class_id, &js_ort_tensor_class, js_ort_tensor_ctor, 3, js_ort_tensor_proto_funcs, countof(js_ort_tensor_proto_funcs))))
     return -1;
 
   if(JS_SetModuleExport(ctx, m, "Tensor", ctor) < 0)
     return -1;
 
-  ctor = js_class_register(ctx, &js_ort_session_class_id, &js_ort_session_class,
-                            js_ort_session_ctor, 1,
-                            js_ort_session_proto_funcs, countof(js_ort_session_proto_funcs));
-  if(JS_IsException(ctor))
+  if(JS_IsException(ctor = js_class_register(ctx, &js_ort_session_class_id, &js_ort_session_class, js_ort_session_ctor, 1, js_ort_session_proto_funcs, countof(js_ort_session_proto_funcs))))
     return -1;
 
   if(JS_SetModuleExport(ctx, m, "Session", ctor) < 0)

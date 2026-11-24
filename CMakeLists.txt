@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.5)
 
 project(qjs-ort VERSION 0.1 LANGUAGES C)
 
+# clangd (Sublime LSP) finds build/compile_commands.json by itself
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 message("Building project [1;31m${PROJECT_NAME}[0m")
 
 include(CheckCCompilerFlag)

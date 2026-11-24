@@ -140,3 +140,36 @@
 
 	* TODO.md:
 	Task 2 deleted, the u2netp names recorded.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	All C sources reformatted to the C style rules.
+
+	* quickjs-ort.c, js-utils.c:
+	Declarations at the top of every block with an empty line after
+	them, a call that is only tested by the next statement moved into
+	the test, an empty line after the closing brace of inner blocks,
+	return type on its own line. No change of behaviour: both tests
+	and the helper self-test pass.
+
+	* js-utils.h:
+	Comments follow the comment style (lowercase start), the history
+	line about the origin of the helpers is gone.
+
+	* CLAUDE.md (C style):
+	An empty line separates declarations from the first statement, and
+	a declaration whose initialiser is only tested next is split.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	clangd finds the compile flags of this project.
+
+	* CMakeLists.txt:
+	Set CMAKE_EXPORT_COMPILE_COMMANDS, so build/compile_commands.json
+	has the include paths of QuickJS and ONNX Runtime.
+
+	* .clangd:
+	New. Points clangd at build/. The .clangd of the parent quickjs
+	directory pins the top-level build database, which does not contain
+	this project, so clangd borrowed flags from another file and did not
+	find onnxruntime_c_api.h.
