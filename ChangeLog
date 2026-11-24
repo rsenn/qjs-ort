@@ -45,3 +45,19 @@
 	opencv-imgproc.js) from JavaScript with float32 Tensor, a minimal
 	Session and run(), checked against OpenCV dnn. Four ordered tasks,
 	a cut line, and everything else moved under "After the PoC works".
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	API sketch and a detailed implementation plan for the PoC tasks.
+
+	* doc/native/ort.md:
+	New. Rough API page: module exports, Tensor and Session (PoC entries
+	marked), errors, threads, the u2netp example.
+
+	* TODO.md:
+	Each PoC task is now a "###" section with the exact implementation
+	steps (shared state, native structs, constructor steps, error paths,
+	ownership of views, verification), plus a "How to work on the tasks"
+	section with the facts checked against the headers and QuickJS
+	sources (no installed qjs-modules utils.h, JS_NewArrayBuffer does not
+	call its free function on failure, status handling of the ORT API).
