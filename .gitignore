@@ -4,3 +4,4 @@ build/
 a.out
 third_party/
 *.sublime-workspace
+auto.json
