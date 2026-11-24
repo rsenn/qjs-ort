@@ -55,7 +55,7 @@ const session = new Session('u2netp.onnx');
 
 | Member | |
 |---|---|
-| `new Session(path)` | Loads the model file. Throws `Error` (with `.code`, see Errors) when the file is missing or not a model. Planned: `new Session(pathOrBuffer, options)`, `pathOrBuffer` also an `ArrayBuffer` or typed array holding the model. |
+| `new Session(pathOrBuffer, options?)` | Loads the model from a file path (string) or from an `ArrayBuffer` or typed array holding the model bytes (not copied, the array may change afterwards). Throws `Error` (with `.code`, see Errors) when the file is missing or the bytes are not a model, `TypeError` for any other first argument. |
 | `session.inputNames` | `Array` of strings, in model order. |
 | `session.outputNames` | `Array` of strings, in model order. |
 | `session.run(feeds, outputNames?)` | Runs the model, synchronously. `feeds` is an object, input name to `Tensor`; every model input must be present, no others. `outputNames` is an array of output names, default all. Returns an object, output name to `Tensor`. |
@@ -69,15 +69,20 @@ const map = out[session.outputNames[0]];
 console.log(map.dims, map.data.length);
 ```
 
+Options (second argument, an object, all optional; unknown names are ignored):
+
+| Option | |
+|---|---|
+| `intraOpThreads`, `interOpThreads` | Thread counts, a non-negative integer, `0` is the ONNX Runtime default. `RangeError` otherwise. |
+| `graphOptimization` | `'disable'`, `'basic'`, `'extended'` or `'all'` (default). `TypeError` otherwise. |
+| `logLevel` | `'verbose'`, `'info'`, `'warning'`, `'error'` or `'fatal'`. `TypeError` otherwise. |
+
 Planned (not PoC):
 
 | Member | |
 |---|---|
 | `session.inputs`, `session.outputs` | Arrays of `{ name, type, dims }`; a dynamic dimension is `-1`, an unnamed element type `undefined`. |
 | `options.providers` | Array of provider names or `{ name, ...providerOptions }`, tried in order: `'cpu'`, `'xnnpack'`, `'nnapi'`, `'cuda'`. |
-| `options.intraOpThreads`, `options.interOpThreads` | Thread counts. |
-| `options.graphOptimization` | `'disable'`, `'basic'`, `'extended'`, `'all'`. |
-| `options.logLevel` | `'verbose'`, `'info'`, `'warning'`, `'error'`, `'fatal'`. |
 | `session.runAsync(feeds, outputNames?)` | `Promise` version, the model runs on a worker thread; ORT never calls into JS. |
 
 ## Errors

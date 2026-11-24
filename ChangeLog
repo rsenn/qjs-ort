@@ -292,3 +292,32 @@
 	* doc/native/ort.md, TODO.md:
 	The Tensor section lists the six types as supported, string and
 	float16 stay planned. The item in TODO.md shrinks accordingly.
+
+2026-11-25  Roman Senn  <roman.l.senn@gmail.com>
+
+	Session takes a buffer and options.
+
+	* quickjs-ort.c (js_ort_session_ctor):
+	The first argument is a path string, or an ArrayBuffer or typed array
+	holding the model, which goes to CreateSessionFromArray. Anything
+	else is a TypeError. The second argument is the options object.
+
+	* quickjs-ort.c (js_ort_session_options, js_ort_option_count)
+	(js_ort_option_choice):
+	New. intraOpThreads and interOpThreads (non-negative integers),
+	graphOptimization and logLevel (names from two small tables) are
+	applied to the OrtSessionOptions before the session is created. A
+	failure leaves the exception pending and the constructor releases
+	everything through its cleanup label as before. Checked with 200 and
+	5000 rounds of failing constructions: the resident size stays flat.
+
+	* tests/session-options-test.js:
+	New, 30 checks: buffer, ArrayBuffer and offset subarray sources, the
+	buffer overwritten after construction, an empty buffer, every option
+	value, the TypeError and RangeError cases for both sources, and 300
+	constructions with release. First version from the nemotron harness,
+	the option code rewritten after review: it declared variables in the
+	middle of blocks and repeated the thread code twice.
+
+	* doc/native/ort.md, TODO.md:
+	Session constructor and options documented, TODO item trimmed.

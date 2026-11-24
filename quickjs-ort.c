@@ -1,6 +1,7 @@
 /*
  * quickjs-ort.c - ONNX Runtime for QuickJS, through its C API.
  */
+#include <math.h>
 #include <quickjs.h>
 #include <cutils.h>
 #include <onnxruntime_c_api.h>
@@ -391,6 +392,139 @@ js_ort_tensor_wrap(JSContext* ctx, OrtValue* value) {
   return obj;
 }
 
+/* name and value of a string option */
+typedef struct {
+  const char* name;
+  int value;
+} js_ort_choice;
+
+static const js_ort_choice js_ort_graph_opt_levels[] = {
+  { "disable", ORT_DISABLE_ALL },
+  { "basic", ORT_ENABLE_BASIC },
+  { "extended", ORT_ENABLE_EXTENDED },
+  { "all", ORT_ENABLE_ALL },
+};
+
+static const js_ort_choice js_ort_log_levels[] = {
+  { "verbose", ORT_LOGGING_LEVEL_VERBOSE },
+  { "info", ORT_LOGGING_LEVEL_INFO },
+  { "warning", ORT_LOGGING_LEVEL_WARNING },
+  { "error", ORT_LOGGING_LEVEL_ERROR },
+  { "fatal", ORT_LOGGING_LEVEL_FATAL },
+};
+
+/*
+ * reads a non-negative integer option.
+ *
+ * returns 1 and sets *out, 0 when the option is undefined, -1 with a
+ * RangeError pending.
+ */
+static int
+js_ort_option_count(JSContext* ctx, JSValueConst options, const char* name, int* out) {
+  JSValue val = JS_GetPropertyStr(ctx, options, name);
+  double d;
+  int ret = 1;
+
+  if(JS_IsUndefined(val))
+    return 0;
+
+  if(!JS_IsNumber(val) || JS_ToFloat64(ctx, &d, val) < 0 || d != floor(d) || d < 0 || d > INT32_MAX) {
+    JS_ThrowRangeError(ctx, "%s must be a non-negative integer", name);
+    ret = -1;
+  } else
+    *out = (int)d;
+
+  JS_FreeValue(ctx, val);
+  return ret;
+}
+
+/*
+ * reads an option that is one of the names of a table.
+ *
+ * returns 1 and sets *out, 0 when the option is undefined, -1 with a
+ * TypeError pending that says what accepted lists.
+ */
+static int
+js_ort_option_choice(JSContext* ctx, JSValueConst options, const char* name, const js_ort_choice* table, size_t count, const char* accepted, int* out) {
+  JSValue val = JS_GetPropertyStr(ctx, options, name);
+  const char* str;
+  int ret = -1;
+
+  if(JS_IsUndefined(val))
+    return 0;
+
+  if(JS_IsString(val) && (str = JS_ToCString(ctx, val))) {
+    for(size_t i = 0; i < count; i++)
+      if(!strcmp(table[i].name, str)) {
+        *out = table[i].value;
+        ret = 1;
+        break;
+      }
+
+    JS_FreeCString(ctx, str);
+  }
+
+  if(ret < 0 && !JS_HasException(ctx))
+    JS_ThrowTypeError(ctx, "%s must be %s", name, accepted);
+
+  JS_FreeValue(ctx, val);
+  return ret;
+}
+
+/*
+ * applies the options object to an OrtSessionOptions.
+ *
+ * returns 0, or -1 with the exception pending. Owns nothing, the caller
+ * releases opts.
+ */
+static int
+js_ort_session_options(JSContext* ctx, OrtSessionOptions* opts, JSValueConst options) {
+  OrtStatus* status;
+  int n, value;
+
+  if(JS_IsUndefined(options))
+    return 0;
+
+  if(!JS_IsObject(options)) {
+    JS_ThrowTypeError(ctx, "Session options must be an object");
+    return -1;
+  }
+
+  if((n = js_ort_option_count(ctx, options, "intraOpThreads", &value)) < 0)
+    return -1;
+
+  if(n && (status = ort_api->SetIntraOpNumThreads(opts, value))) {
+    js_ort_throw_status(ctx, status);
+    return -1;
+  }
+
+  if((n = js_ort_option_count(ctx, options, "interOpThreads", &value)) < 0)
+    return -1;
+
+  if(n && (status = ort_api->SetInterOpNumThreads(opts, value))) {
+    js_ort_throw_status(ctx, status);
+    return -1;
+  }
+
+  if((n = js_ort_option_choice(ctx, options, "graphOptimization", js_ort_graph_opt_levels, countof(js_ort_graph_opt_levels), "'disable', 'basic', 'extended' or 'all'", &value)) < 0)
+    return -1;
+
+  if(n && (status = ort_api->SetSessionGraphOptimizationLevel(opts, value))) {
+    js_ort_throw_status(ctx, status);
+    return -1;
+  }
+
+  if((n = js_ort_option_choice(ctx, options, "logLevel", js_ort_log_levels, countof(js_ort_log_levels), "'verbose', 'info', 'warning', 'error' or 'fatal'", &value)) < 0)
+    return -1;
+
+  if(n && (status = ort_api->SetSessionLogSeverityLevel(opts, value))) {
+    js_ort_throw_status(ctx, status);
+    return -1;
+  }
+
+  return 0;
+}
+
 static JSValue
 js_ort_session_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst argv[]) {
   const char* path = NULL;
@@ -404,15 +538,25 @@ js_ort_session_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCo
   size_t n_outputs = 0;
   char** input_names = NULL;
   char** output_names = NULL;
+  BufferView view;
+  JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
+  int has_buffer = 0;
 
   if(js_ort_init_api(ctx))
     return JS_EXCEPTION;
 
-  if(argc < 1 || !JS_IsString(argv[0]))
-    return JS_ThrowTypeError(ctx, "Session needs a model path");
+  if(argc < 1)
+    return JS_ThrowTypeError(ctx, "Session needs a model path or a buffer");
 
-  if(!(path = JS_ToCString(ctx, argv[0])))
-    return JS_EXCEPTION;
+  if(JS_IsString(argv[0])) {
+    if(!(path = JS_ToCString(ctx, argv[0])))
+      return JS_EXCEPTION;
+  } else if(js_typedarray_get(ctx, argv[0], &view) < 0) {
+    /* js_typedarray_get left its own TypeError, say what a Session takes */
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_ThrowTypeError(ctx, "Session needs a model path or a buffer");
+  } else
+    has_buffer = 1;
 
 #ifdef _WIN32
 #error "wide path conversion not implemented"
@@ -420,14 +564,24 @@ js_ort_session_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueCo
   if((status = ort_api->CreateSessionOptions(&opts)))
     goto fail;
 
-  if((status = ort_api->CreateSession(ort_env, path, opts, &session)))
-    goto fail;
+  if(js_ort_session_options(ctx, opts, options) < 0)
+    goto cleanup;  /* exception already pending */
+
+  if(has_buffer) {
+    if((status = ort_api->CreateSessionFromArray(ort_env, view.ptr, view.len, opts, &session)))
+      goto fail;
+  } else {
+    if((status = ort_api->CreateSession(ort_env, path, opts, &session)))
+      goto fail;
+  }
 
   ort_api->ReleaseSessionOptions(opts);
   opts = NULL;
 #endif
 
-  JS_FreeCString(ctx, path);
+  if(path)
+    JS_FreeCString(ctx, path);
+
   path = NULL;
 
   if((status = ort_api->GetAllocatorWithDefaultOptions(&alloc)))
