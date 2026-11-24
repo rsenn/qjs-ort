@@ -61,3 +61,26 @@
 	section with the facts checked against the headers and QuickJS
 	sources (no installed qjs-modules utils.h, JS_NewArrayBuffer does not
 	call its free function on failure, status handling of the ORT API).
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	Helper pair js-utils.[ch], adopted from qjs-sound and qjs-nanovg.
+
+	* js-utils.h, js-utils.c:
+	New. js_class_register, js_object_from_target, js_typedarray_kind
+	(exact kind by class id), js_typedarray_get and js_typedarray_expect
+	(bytes without copy), js_typedarray_external (view over native
+	memory, free callback runs exactly once), js_typedarray_copy,
+	js_array_toint64, js_array_length, js_global_get_str. Element kinds
+	are the JSTypedArrayEnum of quickjs.h. Self-tested under ASan and
+	UBSan: kinds, offsets, zero length, bad dims, external memory
+	lifetime, subclass prototypes.
+
+	* CMakeLists.txt:
+	Build js-utils.c into module ort.
+
+	* TODO.md:
+	The tasks use the helpers instead of hand-rolled code. QuickJS facts
+	found by the self-test: JS_NewTypedArray with one argument gives a
+	length 0 array for an ArrayBuffer, JS_GetTypedArrayBuffer rejects a
+	DataView.

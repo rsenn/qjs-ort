@@ -47,19 +47,17 @@ Facts verified against this tree, so you do not have to rediscover them:
 - Strings from `SessionGetInputName`/`SessionGetOutputName` are allocated with the allocator passed in; use
   `ort->GetAllocatorWithDefaultOptions(&alloc)` (do not release it, it is a process singleton) and free each name
   with `alloc->Free(alloc, name)` after copying it.
-- No qjs-modules `utils.h`: it is not installed (only `libmodules.a` of the qjs-modules tree has it), so the PoC
-  does not use `js_class_define`/`js_object_from_target`. Use the plain registration of skill section 3 (`JS_NewClassID`
-  once, `JS_NewClass`, prototype object with `JS_SetPropertyFunctionList`, `JS_NewCFunction2(..., JS_CFUNC_constructor, 0)`,
-  `JS_SetConstructor`, `JS_SetClassProto`, `JS_SetModuleExport`) and the constructor tail "read `new_target.prototype`,
-  `JS_NewObjectProtoClass`" with a fallback to `JS_GetClassProto`. Write both once as two small static helpers
-  (`js_ort_class_register`, `js_ort_object_new(ctx, new_target, class_id)`) used by `Tensor` and `Session`, not
-  repeated per class. Whether to depend on `libmodules.a` later is a decision for the user.
-- QuickJS: `JS_NewArrayBuffer(ctx, ptr, len, free_func, opaque, FALSE)` does **not** call `free_func` when it fails
-  (checked in `quickjs.c`), so free what the opaque owns yourself on a failure. `JS_NewTypedArray(ctx, 1, &buf,
-  JS_TYPED_ARRAY_FLOAT32)` makes the view. `JS_GetTypedArrayBuffer(ctx, v, &off, &bytes, &bpe)` returns a new
-  reference to the backing `ArrayBuffer` (free it) and fails by throwing when `v` is not a typed array or
-  `DataView`. There is no public "which typed array is this", test with `JS_IsInstanceOf(ctx, v, ctor)` where
-  `ctor` is `Float32Array` fetched once from the global object.
+- Helpers live in `js-utils.[ch]`, read `js-utils.h` first, every function has its contract there. They are
+  tested, do not reimplement them: `js_class_register` (class, prototype, constructor in one call),
+  `js_object_from_target` (the constructor tail), `js_typedarray_kind`/`js_typedarray_get`/`js_typedarray_expect`
+  (exact typed array kind, bytes without copy, offset applied), `js_typedarray_external` (view over native memory
+  with a free callback), `js_typedarray_copy`, `js_array_toint64` (dims), `js_array_length`, `js_global_get_str`.
+  Kinds are the `JSTypedArrayEnum` of `quickjs.h`. qjs-modules `utils.h` is not installed, so it is not used.
+- QuickJS facts, tested; `js-utils.c` already handles them, they explain why it looks as it does:
+  `JS_NewArrayBuffer` does not call its free function when it fails, `js_typedarray_external` calls it exactly
+  once in every case; `JS_NewTypedArray(ctx, 1, &buf, kind)` gives a **length 0** array for an ArrayBuffer, the
+  view needs `(buf, 0, count)`; `JS_GetTypedArrayBuffer` rejects a `DataView` here; the class id of a typed array
+  gives its exact kind (an `Int16Array` is not a `Uint16Array`), the `constructor.name` trick of qjs-sound does not.
 - Pointer rules from the skill: `JS_GetOpaque2` in every method, `JS_GetOpaque` only in finalizers; finalizers get a
   `JSRuntime*`, so free with `js_free_rt`, `JS_FreeValueRT`; read `argv[i]` only after checking `argc > i`; a
   `JSValue` kept in a native struct needs `JS_DupValue` and a `gc_mark` that calls `JS_MarkValue` on it.
@@ -112,10 +110,8 @@ js_ort_types[] = {
 };
 ```
 
-with two lookups, by name and by `ONNXTensorElementDataType`. The `Float32Array` constructor needed by
-`JS_IsInstanceOf` is looked up from the global object at first use and kept in a static `JSValue` (a global
-class constructor, never freed; acceptable, note it in a comment). Per-type constructors for later types are a
-second table column, not new code.
+with two lookups, by name and by `ONNXTensorElementDataType`. The `array` column is the `JSTypedArrayEnum` that
+`js_typedarray_expect` checks and `js_typedarray_external` creates, so a later type is one more row, no new code.
 
 Native struct, in `JS_SetOpaque` of every Tensor object:
 
@@ -133,18 +129,16 @@ Constructor `js_ort_tensor_ctor(ctx, new_target, argc, argv)`:
 
 1. `argc < 3` is `TypeError("Tensor needs type, data and dims")`.
 2. `type`: `JS_ToCString`, look it up, free the C string, unknown name is `TypeError("unknown tensor type 'x'")`.
-3. `data`: must be a `Float32Array` for this type (`JS_IsInstanceOf` against the stored constructor), else
-   `TypeError("float32 tensor needs a Float32Array")`. Get buffer pointer and window with
-   `JS_GetTypedArrayBuffer` + `JS_GetArrayBuffer`, add the byte offset (skill section 7, "the +offset is
-   required"), free the buffer reference. A zero-length array is allowed (dims containing 0).
-4. `dims`: `JS_IsArray`, else `TypeError`. Read `length` and each element with `JS_ToInt64`/`JS_ToIndex`-style
-   checks: negative or non-integer is `RangeError("bad dimension")`. Keep them in an `int64_t[]` (`js_malloc`
-   sized `length`, a `dims` of length 0 is a scalar: allocate at least 1 element). Multiply with overflow
-   check, the product must equal `data.length` (`bytes / size`), else `RangeError("dims do not match data
-   length: <prod> vs <len>")`.
+3. `data`: `js_typedarray_expect(ctx, argv[1], js_ort_types[t].array, &view)`; it throws `TypeError("expected a
+   Float32Array")` and applies the byte offset. `view.ptr`/`view.len` (bytes) go to ORT. A zero-length array is
+   allowed (dims containing 0).
+4. `dims`: `dims = js_array_toint64(ctx, argv[2], &ndims)`; it throws `TypeError` (not an Array) or `RangeError`
+   (element negative, fractional, not a number) and returns at least one element of memory, a `dims` of length 0
+   is a scalar. Multiply with overflow check, the product must equal `view.len / size`, else `RangeError("dims do
+   not match data length: <prod> vs <len>")`. Free `dims` with `js_free` on every path.
 5. `ort_api->CreateTensorWithDataAsOrtValue(ort_cpu, ptr, bytes, dims, ndims, onnx_type, &value)`; failure goes
    through `js_ort_throw_status`.
-6. `obj = js_ort_object_new(ctx, new_target, js_ort_tensor_class_id)`, `s->data = JS_DupValue(ctx, argv[1])`,
+6. `obj = js_object_from_target(ctx, new_target, js_ort_tensor_class_id)`, `s->data = JS_DupValue(ctx, argv[1])`,
    `JS_SetOpaque(obj, s)`.
 7. Single `fail:` label that frees dims, releases `value`, frees `s`; written once, every error path jumps there
    (skill section 3).
@@ -170,7 +164,8 @@ Getters (`JS_CGETSET_MAGIC_DEF` or plain `JS_CGETSET_DEF`, all read-only):
 
 Add `Tensor` to the module exports (`JS_AddModuleExport(ctx, m, "Tensor")` in the init function, and
 `JS_SetModuleExport` of the constructor in `js_ort_init`; both names must match). Class registration happens in
-`js_ort_init`, not in the exported-names function (see `js_ort_class_register` above).
+`js_ort_init`, not in the exported-names function (`js_class_register(ctx, &js_ort_tensor_class_id, &def, js_ort_tensor_ctor, 3, funcs, countof(funcs))`,
+the result is the constructor to export).
 
 Also export a second helper for task 3, `static JSValue js_ort_tensor_wrap(JSContext*, OrtValue*)`: makes an
 output tensor object that **takes ownership** of an `OrtValue` (type read from `GetTensorTypeAndShape` +
@@ -214,7 +209,7 @@ Constructor `js_ort_session_ctor`:
    `char*` call (a task for the later list).
 3. `SessionGetInputCount`/`SessionGetOutputCount`, then per index `SessionGetInputName(session, i, alloc,
    &name)` / `SessionGetOutputName`, copy into the arrays, `alloc->Free(alloc, name)`.
-4. Object via `js_ort_object_new`, `JS_SetOpaque`. One `fail:` label releasing the session and the names
+4. Object via `js_object_from_target`, `JS_SetOpaque`. One `fail:` label releasing the session and the names
    collected so far.
 
 Missing file: ORT answers with code `ORT_NO_SUCHFILE`; not a model: `ORT_INVALID_PROTOBUF` or `ORT_NO_MODEL`;
@@ -283,12 +278,12 @@ static void js_ort_view_free(JSRuntime* rt, void* opaque, void* ptr);   /* JS_Fr
 `data` getter for an output: `ort_api->GetTensorMutableData(value, &ptr)`; element count from
 `GetTensorTypeAndShape` + `GetTensorShapeElementCount` (release the info); `bytes = count * size`;
 `view = js_malloc(sizeof *view)`, `view->tensor = JS_DupValue(ctx, this_val)`;
-`buf = JS_NewArrayBuffer(ctx, ptr, bytes, js_ort_view_free, view, FALSE)`; on failure free the dup and the
-view yourself (the callback is not called then); `JS_NewTypedArray(ctx, 1, &buf, type.array)` and free `buf`.
+`js_typedarray_external(ctx, ptr, count, js_ort_types[t].array, js_ort_view_free, view)`; its callback runs
+exactly once, also when it fails, so on `JS_EXCEPTION` just return, never free the dup or the view yourself.
 **Do not cache the view in the tensor**: a cached view whose buffer holds the tensor is a reference cycle that
 QuickJS cannot see, and it leaks. A fresh view per read is the rule; document it (it is in `doc/native/ort.md`).
 If creating the view per read turns out to cost real time in the PoC loop, measure first, then consider
-`JS_NewArrayBufferCopy` for outputs (a copy, no lifetime coupling) as the fallback and say so in the ChangeLog.
+`js_typedarray_copy` for outputs (a copy, no lifetime coupling) as the fallback and say so in the ChangeLog.
 
 Verify with a model that needs no download: none exists until the hand-built test model (later list), so this
 task is verified through task 4; until then, check only the error paths without a model: a released session,

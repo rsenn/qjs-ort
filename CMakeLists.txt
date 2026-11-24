@@ -27,7 +27,7 @@ link_directories(${ORT_LIBRARY_DIR} ${QUICKJS_LIBRARY_DIR})
 
 set(ort_LIBRARIES ${ORT_LIBRARY})
 
-make_module(ort quickjs-ort.c)
+make_module(ort quickjs-ort.c js-utils.c js-utils.h)
 
 foreach(_t qjs-ort qjs-ort-static)
   if(TARGET ${_t})
