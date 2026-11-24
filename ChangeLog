@@ -1,0 +1,37 @@
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	Project created.
+
+	* README.md, CLAUDE.md, TODO.md, BUGS:
+	Initial layout and the first tasks. No code yet; the design is in
+	TODO.md and ~/Sources/js-engines/TODO.md section 16.v.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	CMake skeleton and an empty module that reports the ONNX Runtime
+	version.
+
+	* CMakeLists.txt:
+	New. Includes the shared cmake layer, calls quickjs_module_options()
+	once and builds module ort (ort.so) linked against ONNX Runtime.
+
+	* cmake/FindQuickJS.cmake, cmake/BuildQuickJS.cmake,
+	cmake/QuickJSModule.cmake:
+	Synced from the quickjs-native-bindings skill (cmake-sync.sh).
+
+	* cmake/UseMultiArch.cmake, cmake/Functions.cmake, cmake/Compat.cmake:
+	Copied from qjs-nanovg (no canonical copy yet).
+
+	* cmake/FindONNXRuntime.cmake (find_onnxruntime):
+	New. ORT_PREFIX, pkg-config, find_path/find_library and the vendored
+	third_party/onnxruntime-* copy.
+
+	* tools/fetch-onnxruntime.sh:
+	New. Unpacks the NuGet package of ONNX Runtime into third_party/ and
+	adds the libonnxruntime.so.1 SONAME link the package lacks.
+
+	* quickjs-ort.c (js_init_module):
+	New. Exports version from OrtGetApiBase()->GetVersionString().
+
+	* .gitignore:
+	Ignore third_party/.

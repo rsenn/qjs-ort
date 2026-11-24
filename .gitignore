@@ -1,0 +1,5 @@
+build/
+.tmp/
+*.log
+a.out
+third_party/
