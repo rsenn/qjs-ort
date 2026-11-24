@@ -249,3 +249,22 @@
 
 	* CLAUDE.md (Build & run), TODO.md:
 	Notes updated, the install rpath item is done.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	Permanent test that needs no model download.
+
+	* tests/ort-test.js:
+	New. Builds a one-node Add model (a, b to c, float32 [3]) as protobuf
+	bytes, writes it to .tmp/add3.onnx and checks names, run results,
+	repeated runs, that earlier result views and the inputs stay
+	unchanged, the TypeError cases (no argument, missing, unknown and
+	non-tensor input, unknown output name), the ORT error for a wrong
+	shape, a broken and a missing model file (code 3), 300 rounds with a
+	gc, and run after release. 26 checks. First version from the nemotron
+	harness; fixed after review: the release check wanted a numeric code
+	but that error carries the message session released, and the 300
+	rounds printed one line each.
+
+	* TODO.md:
+	Item done and removed.

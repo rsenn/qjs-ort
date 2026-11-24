@@ -62,16 +62,13 @@ Facts verified against this tree, so you do not have to rediscover them:
 
 ## Next, in this order
 
-1. **Tests without a download**: `tests/ort-test.js` builds a tiny ONNX model (an Add or MatMul graph written as
-  protobuf bytes by hand) and checks `run` against known numbers, plus the bad-input cases of tasks 1 to 3 as
-  permanent tests; tinytest style if the tree has `tinytest.js` (ask before adding it).
-- **Rest of the Tensor/Session surface** from `doc/native/ort.md`: element types float64/int32/int64/uint8/bool,
+1. **Rest of the Tensor/Session surface** from `doc/native/ort.md`: element types float64/int32/int64/uint8/bool,
   string later; `new Session(pathOrBuffer, options)` with `providers`, `intraOpThreads`, `interOpThreads`,
   `graphOptimization`, `logLevel`; `inputs`/`outputs` (name, element type, dims); `ort.providers`; wide paths on
   Windows.
-- **FindONNXRuntime, rest**: let CMake call `tools/fetch-onnxruntime.sh` itself when nothing is found
+2. **FindONNXRuntime, rest**: let CMake call `tools/fetch-onnxruntime.sh` itself when nothing is found
   (`BUILD_ORT`-style option), the aarch64 and Termux variants (`fetch-onnxruntime.sh VERSION linux-arm64`,
-  Android needs the aar), `INSTALL_RPATH`, and a cross build against `/mnt/data/sysroots/ort-1.32.0-aarch64`.
+  Android needs the aar), and a cross build against `/mnt/data/sysroots/ort-1.32.0-aarch64`.
 - **Examples and README**: `examples/` with the u2netp cutout and a small sequence model in a loop; README status
   line and Build section updated to the real state.
 - **opencv-imgproc.js**: an `ort` backend for `--dnn-model` next to `dnn` (qjs-opencv's file, ask first).
