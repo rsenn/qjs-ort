@@ -1,36 +1,26 @@
 # TODO
 
-## Goal: minimal proof of concept, run u2netp.onnx from JavaScript
+## Status: the proof of concept works (2026-11-24)
 
-The first milestone is not the full API of README.md. It is one real model running end to end with as little of
-qjs-ort as needed: `u2netp.onnx` (salient-object matte, 4.4 MB, float32 only, one image input, several outputs),
-the same model `~/Sources/quickjs/qjs-opencv/tools/opencv-imgproc.js` runs through `cv.readNetFromONNX`
-(`MODELS.u2netp`, `runSalient()`: input 320x320, mean `[123.6, 116.2, 103.5]`, scale `0.019`, swapRB, first output
-is the probability map). The weights are `~/Sources/quickjs/qjs-opencv/models/u2netp.onnx`; never copy them into
-this repo (the models directory is outside git, see `modelsDir()` there).
+`tests/u2netp-poc.js` runs `u2netp.onnx` (the salient-object model of `qjs-opencv/tools/opencv-imgproc.js`) through
+`Session`, `Tensor` and `session.run()` and compares the first output with OpenCV `dnn`: max abs difference 7.6e-5,
+ORT 290 ms against OpenCV 294 ms for one 320x320 run, 25 runs in a loop give identical results. Run it with the
+command in `CLAUDE.md`. The weights stay in `~/Sources/quickjs/qjs-opencv/models/`, never copy them into this repo.
 
-Done when `tests/u2netp-poc.js` loads the model, feeds a picture, takes the first output and the saliency map
-matches the OpenCV `dnn` one (same script path, compare max abs difference, expect below 1e-3), and the script
-runs twice in a loop without growing memory.
-
-Cut line, everything not listed in tasks 1 to 4 stays out of the PoC: no `Session` options, no buffers as model
-source, no `inputs`/`outputs` metadata, no string tensors, no async, no other execution providers, no example
-directory. The API is sketched in `doc/native/ort.md`; keep that page in step with the code (the PoC entries are
-marked there).
-
-Done so far (see ChangeLog): CMake skeleton, module `ort` that exports `version`, `FindONNXRuntime.cmake`,
-`tools/fetch-onnxruntime.sh` with the x86_64 copy in `third_party/`, `js-utils.[ch]`, the float32 `Tensor` class, the minimal `Session` class, `session.run()` with output tensors.
+The API is sketched in `doc/native/ort.md`, keep that page in step with the code (entries marked PoC exist).
+Done so far, see the ChangeLog: CMake skeleton, `FindONNXRuntime.cmake`, `tools/fetch-onnxruntime.sh`,
+`js-utils.[ch]`, the float32 `Tensor`, the minimal `Session`, `session.run()` with output tensors, the PoC script.
 
 ## In progress
 
 - (nothing)
 
-## How to work on the tasks (applies to 1 to 4)
+## How to work on C tasks here
 
 Read first: `CLAUDE.md` of this project, `doc/native/ort.md`, the `quickjs-native-bindings` skill (sections 3, 4, 7,
 16, 17, 19, 23), `comment-style` (context `C | quickjs | ...`). Everything goes into `quickjs-ort.c` for now (one
 file; split into `ort-*.c` only when it passes about 800 lines, and then ask). Build and run exactly as in
-`CLAUDE.md`: `cmake --build build`, `QUICKJS_MODULE_PATH=build qjsm tests/x.js`. `qjsm -e` cannot `import`, write
+`CLAUDE.md` (`cmake --build build/x86_64-linux-debug`, `QUICKJS_MODULE_PATH=build/x86_64-linux-debug qjsm tests/x.js`). `qjsm -e` cannot `import`, write
 a script file. Check the build output for warnings; there must be none.
 
 Facts verified against this tree, so you do not have to rediscover them:
@@ -70,48 +60,15 @@ Facts verified against this tree, so you do not have to rediscover them:
   exit 139), and a leak check as in skill section 16 (run with N and 25*N rounds under `qjsm -d`, diff the dumps).
   Do not commit unless asked.
 
-## PoC tasks, in this order
+## Next, in this order
 
-(Tasks 1 to 3, the float32 `Tensor`, the minimal `Session` and `session.run()`, are done: see the ChangeLog. The u2netp input name is `input.1`, its outputs are `1959` to `1965`; the first output is the probability map.)
+1. **Install rpath (found 2026-11-24)**: the `ort.so` the stack installs into `/usr/local/lib/x86_64-linux-gnu/quickjs`
+   cannot load (`libonnxruntime.so.1 => not found`), because only the build tree has an rpath. Set `INSTALL_RPATH`
+   (the directory of `ORT_LIBRARY`, or install the ONNX Runtime libraries next to the module), then check
+   `ldd` of the installed file and `import 'ort'` without `QUICKJS_MODULE_PATH`.
 
-### 4. The PoC script `tests/u2netp-poc.js`
 
-Files: `tests/u2netp-poc.js` only (plus the ChangeLog and TODO updates). Runs under `qjsm`:
-`QUICKJS_MODULE_PATH=build:<opencv build dir> qjsm tests/u2netp-poc.js [picture] [model]` (use `;` as separator
-if `:` fails, skill section 19); defaults: model `~/Sources/quickjs/qjs-opencv/models/u2netp.onnx` (from the
-`WB_MODELS_DIR` environment variable if set, as `modelsDir()` does), picture `~/Sources/quickjs/qjs-opencv/tests/
-test_linesegmentdetector.jpg` or any JPEG given. Find a working qjs-opencv build with `ls ~/Sources/quickjs/qjs-opencv/build*`
-or ask; do not build OpenCV.
-
-Steps, in this order, printing one line each:
-
-1. `session = new Session(model)`; print `inputNames` and `outputNames` (this is where the real names are learned;
-   write them as a comment at the top of the script).
-2. `img = cv.imread(picture)`; blob with exactly the call of `runSalient()` in opencv-imgproc.js (copy its
-   arguments, `work = img` unscaled is fine for the PoC): `cv.blobFromImage(img, 0.019, new cv.Size(320, 320),
-   new cv.Scalar(123.6, 116.2, 103.5), true, false)`.
-3. ORT path: `new Tensor('float32', blob.data32F, [1, 3, 320, 320])` (check `blob.data32F` is a `Float32Array`
-   view; if it is not, build one from the blob's buffer and note it in BUGS of qjs-opencv, not here), run with the
-   first input name, take the first output name's tensor, `.data` is the 320x320 map. Time it.
-4. OpenCV path: `cv.readNetFromONNX(model, cv.dnn.ENGINE_AUTO)`, `net.setInput(blob)`,
-   `net.forward(net.getUnconnectedOutLayersNames())[0].data32F`. Time it.
-5. Compare: max absolute difference over all 320*320 values, print it; fail (`std.exit(1)`) when it is 1e-3
-   or more. Print the shape and min/max of both.
-6. Min/max normalise the ORT map as `runSalient()` does, build a `cv.Mat` (`CV_32F`, 320x320), convert to 8 bit
-   and write `u2netp-matte.png` next to the script (in the scratch dir, not the repo; accept `--out`).
-7. Loop: run the ORT path 25 times in a row, check each result equals the first one exactly (same input, same
-   model: deterministic on CPU; if not, relax to 1e-6 and say why).
-8. Leak check, by hand, recorded in the ChangeLog entry: `qjsm -d tests/u2netp-poc.js` with the loop count 5 and
-   125 (take the count from `argv`), `diff` the memory dumps: object and byte counts equal.
-
-The script uses plain top-level code and `console.log`; no `tinytest.js` yet (adding it is a separate decision,
-ask first). Exit status 0 on success, 1 on any failed check; any exception is printed with its stack. When it
-passes, the PoC milestone is reached: update the "Done so far" paragraph above, move what is next from "After
-the PoC works" into the numbered list, and tell the user.
-
-## After the PoC works (do not start before)
-
-- **Tests without a download**: `tests/ort-test.js` builds a tiny ONNX model (an Add or MatMul graph written as
+2. **Tests without a download**: `tests/ort-test.js` builds a tiny ONNX model (an Add or MatMul graph written as
   protobuf bytes by hand) and checks `run` against known numbers, plus the bad-input cases of tasks 1 to 3 as
   permanent tests; tinytest style if the tree has `tinytest.js` (ask before adding it).
 - **Rest of the Tensor/Session surface** from `doc/native/ort.md`: element types float64/int32/int64/uint8/bool,

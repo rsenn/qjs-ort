@@ -204,3 +204,31 @@
 
 	* TODO.md:
 	Task 3 deleted.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	Build instructions updated for the build/<triplet>-<config> layout.
+
+	* CLAUDE.md (Build & run, Status):
+	Use build/x86_64-linux-debug, the module path for scripts that also
+	import opencv, the rpath-less installed ort.so, and the rule never to
+	run qjsm with -d.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	The proof of concept works: u2netp.onnx runs from JavaScript.
+
+	* tests/u2netp-poc.js:
+	New, first version from the nemotron harness session. Loads
+	u2netp.onnx, builds the blob with qjs-opencv exactly as
+	opencv-imgproc.js runSalient does, runs it through ort and through
+	OpenCV dnn, compares the raw outputs (max abs difference 7.6e-5,
+	limit 1e-3), writes the matte to .tmp/u2netp-matte.png and runs 25
+	rounds that must give identical results. Fixed after review: the
+	model path ignored its argument when WB_MODELS_DIR was set (a ??
+	and ?: precedence bug), and the OpenCV time included loading the
+	network, now shown separately.
+
+	* TODO.md:
+	Rewritten as a status page: PoC reached, the install rpath of the
+	installed ort.so first, the later list after it.

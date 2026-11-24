@@ -10,17 +10,24 @@ C API (`onnxruntime_c_api.h`, no C++ API needed). It builds to a shared library 
 basslines, accompaniments) on the workstation, the Raspberry Pi and the phone (Termux), and, through the
 N-API adapter of `~/Sources/js-engines`, on Bun, Node and Deno.
 
-Status: project skeleton only; read `TODO.md` for what comes next.
+Status: proof of concept in progress (`Tensor`, `Session`, `session.run()` exist); read `TODO.md` for what comes next.
 
 ## Build & run
 
-Not wired yet (first task in `TODO.md`). The intended shape, as in the sibling projects:
+Builds live in `build/<triplet>-<config>` (`build/x86_64-linux-debug` is the one to use here; the user's
+scripts create the others). The first configure needs `-DORT_PREFIX=<onnxruntime install>` unless
+`third_party/onnxruntime-linux-x64-1.32.0` exists (`tools/fetch-onnxruntime.sh` makes it).
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Debug     # -DORT_PREFIX=<onnxruntime install> if not found
-cmake --build build
-QUICKJS_MODULE_PATH=build qjsm tests/ort-test.js     # qjsm, NOT plain qjs
+cmake --build build/x86_64-linux-debug
+QUICKJS_MODULE_PATH=build/x86_64-linux-debug qjsm tests/session-test.js     # qjsm, NOT plain qjs
+# a script that also imports opencv needs the installed modules too, separator is ;
+QUICKJS_MODULE_PATH="build/x86_64-linux-debug;/usr/local/lib/x86_64-linux-gnu/quickjs" qjsm tests/u2netp-poc.js
 ```
+
+The installed `ort.so` in `/usr/local/lib/x86_64-linux-gnu/quickjs` cannot find `libonnxruntime.so.1` (no
+install rpath yet, see `TODO.md`): always put the build directory first in `QUICKJS_MODULE_PATH`. Never run
+`qjsm` with `-d`, it opens an interactive shell; `qjsm --dump script.js < /dev/null` prints the memory counts.
 
 Use the `quickjs-native-bindings` skill for any C code here (class registration, ownership, finalizers,
 CMake layout). Match the neighbours: `~/Sources/quickjs/qjs-nanovg` is the lean reference project.
