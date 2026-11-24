@@ -49,6 +49,11 @@ typedef struct {
   char** output_names;                  /* js_malloc'd array of js_strdup'd names, n_outputs long */
 } JSOrtSession;
 
+/* view over an output tensor's memory, keeps the tensor object alive */
+typedef struct {
+  JSValue tensor;                       /* JS_DupValue of the Tensor object */
+} JSOrtView;
+
 static JSClassID js_ort_tensor_class_id;
 static JSClassID js_ort_session_class_id;
 
@@ -133,6 +138,13 @@ js_ort_session_finalizer(JSRuntime* rt, JSValue val) {
     js_ort_session_free_names(rt, s->output_names, s->n_outputs);
 
   js_free_rt(rt, s);
+}
+
+static void
+js_ort_view_free(JSRuntime* rt, void* opaque, void* ptr) {
+  JSOrtView* view = opaque;
+  JS_FreeValueRT(rt, view->tensor);
+  js_free_rt(rt, view);
 }
 
 static void
@@ -277,6 +289,12 @@ js_ort_tensor_get_dims(JSContext* ctx, JSValueConst this_val) {
 static JSValue
 js_ort_tensor_get_data(JSContext* ctx, JSValueConst this_val) {
   JSOrtTensor* s;
+  OrtTensorTypeAndShapeInfo* info = NULL;
+  OrtStatus* status = NULL;
+  size_t count = 0;
+  void* ptr = NULL;
+  JSOrtView* view = NULL;
+  JSValue arr;
 
   if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_tensor_class_id)))
     return JS_EXCEPTION;
@@ -284,8 +302,29 @@ js_ort_tensor_get_data(JSContext* ctx, JSValueConst this_val) {
   if(!JS_IsUndefined(s->data))
     return JS_DupValue(ctx, s->data);
 
-  /* task 3: output tensor data view */
-  return JS_UNDEFINED;
+  if((status = ort_api->GetTensorTypeAndShape(s->value, &info)))
+    return js_ort_throw_status(ctx, status);
+
+  if((status = ort_api->GetTensorShapeElementCount(info, &count))) {
+    ort_api->ReleaseTensorTypeAndShapeInfo(info);
+    return js_ort_throw_status(ctx, status);
+  }
+
+  if((status = ort_api->GetTensorMutableData(s->value, &ptr))) {
+    ort_api->ReleaseTensorTypeAndShapeInfo(info);
+    return js_ort_throw_status(ctx, status);
+  }
+
+  ort_api->ReleaseTensorTypeAndShapeInfo(info);
+
+  if(!(view = js_malloc(ctx, sizeof(*view))))
+    return JS_ThrowOutOfMemory(ctx);
+
+  view->tensor = JS_DupValue(ctx, this_val);
+  arr = js_typedarray_external(ctx, ptr, count, js_ort_types[s->type].array, js_ort_view_free, view);
+
+  /* on failure js_typedarray_external has already called js_ort_view_free */
+  return arr;
 }
 
 static const JSCFunctionListEntry js_ort_tensor_proto_funcs[] = {
@@ -311,11 +350,14 @@ js_ort_tensor_wrap(JSContext* ctx, OrtValue* value) {
   JSValue obj;
   JSOrtTensor* s;
 
-  if((status = ort_api->GetTensorTypeAndShape(value, &info)))
+  if((status = ort_api->GetTensorTypeAndShape(value, &info))) {
+    ort_api->ReleaseValue(value);
     return js_ort_throw_status(ctx, status);
+  }
 
   if((status = ort_api->GetTensorElementType(info, &onnx_type))) {
     ort_api->ReleaseTensorTypeAndShapeInfo(info);
+    ort_api->ReleaseValue(value);
     return js_ort_throw_status(ctx, status);
   }
 
@@ -537,9 +579,189 @@ js_ort_session_release(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
   return JS_UNDEFINED;
 }
 
+static JSValue
+js_ort_session_run(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst argv[]) {
+  JSOrtSession* s;
+  JSPropertyEnum* tab = NULL;
+  uint32_t len = 0;
+  const char** in_names = NULL;
+  const OrtValue** in_values = NULL;
+  const char** out_names = NULL;
+  OrtValue** out_values = NULL;
+  JSValue obj = JS_UNDEFINED, result = JS_EXCEPTION;
+  OrtStatus* status;
+  size_t n_in, n_out, i, j;
+
+  if(!(s = JS_GetOpaque2(ctx, this_val, js_ort_session_class_id)))
+    return JS_EXCEPTION;
+
+  if(!s->session) {
+    JSValue err = JS_NewError(ctx);
+
+    JS_DefinePropertyValueStr(ctx, err, "message", JS_NewString(ctx, "session released"), JS_PROP_C_W_E);
+    return JS_Throw(ctx, err);
+  }
+
+  if(argc < 1 || !JS_IsObject(argv[0]))
+    return JS_ThrowTypeError(ctx, "run needs an object of input tensors");
+
+  if(JS_GetOwnPropertyNames(ctx, &tab, &len, argv[0], JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0)
+    return JS_EXCEPTION;
+
+  n_in = s->n_inputs;
+  n_out = s->n_outputs;
+
+  /* one element more, so that a model without inputs still gets a pointer */
+  if(!(in_names = js_mallocz(ctx, (n_in + 1) * sizeof(char*))) || !(in_values = js_mallocz(ctx, (n_in + 1) * sizeof(OrtValue*)))) {
+    JS_ThrowOutOfMemory(ctx);
+    goto done;
+  }
+
+  /* every key of feeds names an input of the model, the cached name goes to Run */
+  for(i = 0; i < len; i++) {
+    JSOrtTensor* tensor;
+    const char* name;
+    JSValue val;
+
+    if(!(name = JS_AtomToCString(ctx, tab[i].atom)))
+      goto done;
+
+    for(j = 0; j < n_in; j++)
+      if(!strcmp(s->input_names[j], name))
+        break;
+
+    if(j == n_in) {
+      JS_ThrowTypeError(ctx, "unknown input '%s'", name);
+      JS_FreeCString(ctx, name);
+      goto done;
+    }
+
+    if(JS_IsException(val = JS_GetProperty(ctx, argv[0], tab[i].atom))) {
+      JS_FreeCString(ctx, name);
+      goto done;
+    }
+
+    if(!(tensor = JS_GetOpaque(val, js_ort_tensor_class_id))) {
+      JS_ThrowTypeError(ctx, "input '%s' is not a Tensor", name);
+      JS_FreeValue(ctx, val);
+      JS_FreeCString(ctx, name);
+      goto done;
+    }
+
+    in_names[j] = s->input_names[j];
+    in_values[j] = tensor->value;
+    JS_FreeValue(ctx, val);
+    JS_FreeCString(ctx, name);
+  }
+
+  for(j = 0; j < n_in; j++) {
+    if(!in_names[j]) {
+      JS_ThrowTypeError(ctx, "missing input '%s'", s->input_names[j]);
+      goto done;
+    }
+  }
+
+  if(argc > 1 && !JS_IsUndefined(argv[1])) {
+    int64_t count;
+
+    if(JS_IsArray(ctx, argv[1]) != 1 || (count = js_array_length(ctx, argv[1])) <= 0) {
+      JS_ThrowTypeError(ctx, "outputNames must be a non-empty array of strings");
+      goto done;
+    }
+
+    n_out = count;
+  }
+
+  if(!(out_names = js_mallocz(ctx, n_out * sizeof(char*))) || !(out_values = js_mallocz(ctx, n_out * sizeof(OrtValue*)))) {
+    JS_ThrowOutOfMemory(ctx);
+    goto done;
+  }
+
+  if(argc > 1 && !JS_IsUndefined(argv[1])) {
+    for(i = 0; i < n_out; i++) {
+      const char* name;
+      JSValue item;
+
+      if(JS_IsException(item = JS_GetPropertyUint32(ctx, argv[1], i)))
+        goto done;
+
+      if(!JS_IsString(item)) {
+        JS_ThrowTypeError(ctx, "outputNames must be a non-empty array of strings");
+        JS_FreeValue(ctx, item);
+        goto done;
+      }
+
+      name = JS_ToCString(ctx, item);
+      JS_FreeValue(ctx, item);
+
+      if(!name)
+        goto done;
+
+      for(j = 0; j < s->n_outputs; j++)
+        if(!strcmp(s->output_names[j], name))
+          break;
+
+      if(j == s->n_outputs) {
+        JS_ThrowTypeError(ctx, "unknown output '%s'", name);
+        JS_FreeCString(ctx, name);
+        goto done;
+      }
+
+      out_names[i] = s->output_names[j];
+      JS_FreeCString(ctx, name);
+    }
+  } else {
+    for(i = 0; i < n_out; i++)
+      out_names[i] = s->output_names[i];
+  }
+
+  /* nothing here calls back into JS, ONNX Runtime blocks until the model is done */
+  if((status = ort_api->Run(s->session, NULL, in_names, in_values, n_in, out_names, n_out, out_values))) {
+    js_ort_throw_status(ctx, status);
+    goto done;
+  }
+
+  if(JS_IsException(obj = JS_NewObject(ctx)))
+    goto done;
+
+  for(i = 0; i < n_out; i++) {
+    JSValue tensor = js_ort_tensor_wrap(ctx, out_values[i]);
+
+    /* wrap owns the value, also when it fails */
+    out_values[i] = NULL;
+
+    if(JS_IsException(tensor))
+      goto done;
+
+    if(JS_DefinePropertyValueStr(ctx, obj, out_names[i], tensor, JS_PROP_C_W_E) < 0)
+      goto done;
+  }
+
+  result = obj;
+  obj = JS_UNDEFINED;
+
+done:
+  if(out_values)
+    for(i = 0; i < n_out; i++)
+      if(out_values[i])
+        ort_api->ReleaseValue(out_values[i]);
+
+  JS_FreeValue(ctx, obj);
+
+  if(tab)
+    JS_FreePropertyEnum(ctx, tab, len);
+
+  js_free(ctx, in_names);
+  js_free(ctx, in_values);
+  js_free(ctx, out_names);
+  js_free(ctx, out_values);
+  return result;
+}
+
 static const JSCFunctionListEntry js_ort_session_proto_funcs[] = {
   JS_CGETSET_DEF("inputNames", js_ort_session_get_input_names, NULL),
   JS_CGETSET_DEF("outputNames", js_ort_session_get_output_names, NULL),
+  JS_CFUNC_DEF("run", 1, js_ort_session_run),
   JS_CFUNC_DEF("release", 0, js_ort_session_release),
   JS_PROP_STRING_DEF("[Symbol.toStringTag]", "Session", JS_PROP_CONFIGURABLE),
 };

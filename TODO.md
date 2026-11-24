@@ -19,7 +19,7 @@ directory. The API is sketched in `doc/native/ort.md`; keep that page in step wi
 marked there).
 
 Done so far (see ChangeLog): CMake skeleton, module `ort` that exports `version`, `FindONNXRuntime.cmake`,
-`tools/fetch-onnxruntime.sh` with the x86_64 copy in `third_party/`, `js-utils.[ch]`, the float32 `Tensor` class, the minimal `Session` class.
+`tools/fetch-onnxruntime.sh` with the x86_64 copy in `third_party/`, `js-utils.[ch]`, the float32 `Tensor` class, the minimal `Session` class, `session.run()` with output tensors.
 
 ## In progress
 
@@ -72,65 +72,7 @@ Facts verified against this tree, so you do not have to rediscover them:
 
 ## PoC tasks, in this order
 
-(Tasks 1 and 2, the float32 `Tensor` and the minimal `Session`, are done: see the ChangeLog. The output-tensor `data` getter returns `undefined` until task 3. The u2netp input name is `input.1`, its outputs are `1959` to `1965`; the first output is the probability map.)
-
-### 3. `session.run(feeds, outputNames?)`
-
-Files: `quickjs-ort.c`.
-
-Method `js_ort_session_run(ctx, this_val, argc, argv)`, registered as `JS_CFUNC_DEF("run", 1, ...)`:
-
-1. `s = JS_GetOpaque2(...)`; `s->session == NULL` is `Error("session released")`.
-2. `argc < 1` or `feeds` not an object is `TypeError("run needs an object of input tensors")`.
-3. Feeds: `JS_GetOwnPropertyNames(ctx, &tab, &len, feeds, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY)`. Allocate
-   `const char** in_names` and `const OrtValue** in_values` (both `js_mallocz` of `n_inputs`; a `len` different
-   from `n_inputs` is already an error: `TypeError` naming the first missing or unknown input, found by the two
-   loops below). For each key: `JS_AtomToCString`, find it in `s->input_names` with `strcmp`, not found is
-   `TypeError("unknown input 'name'")`; the value `JS_GetProperty(ctx, feeds, atom)`, `JS_GetOpaque2` with
-   the tensor class id (a non-Tensor is `TypeError("input 'name' is not a Tensor")`); store the **cached** name
-   pointer and `tensor->value` in the position of the model's input order (so `in_names[i]`/`in_values[i]`
-   follow `s->input_names[i]`). Free the atom string, the value reference and, at the end, the property table
-   (`JS_FreePropertyEnum(ctx, tab, len)`; it also frees the atoms in the table). After the loop every slot must be filled, a hole is `TypeError("missing input 'name'")`.
-   The `Tensor` JS objects stay alive for the whole call because `feeds` holds them; do not release their
-   values.
-4. Output names: when `argc > 1` and not undefined, an array of strings, each checked against
-   `s->output_names` (`TypeError("unknown output 'name'")`), the cached pointer stored; else all outputs.
-   `n_out` is their count (zero outputs requested is `TypeError`).
-5. `OrtValue** out_values = js_mallocz(n_out * sizeof(void*))` (all NULL), then
-   `ort_api->Run(s->session, NULL, in_names, in_values, n_in, out_names, n_out, out_values)`. Run is blocking and
-   must not call into JS; do nothing else between the arrays and the call.
-6. On a failed status: release every non-NULL `out_values[i]`, free all arrays, `js_ort_throw_status`. Shape and
-   element-type mismatches of an input are reported by ORT as `ORT_INVALID_ARGUMENT` / `ORT_FAIL`; do not
-   duplicate the checks in the binding, but make sure the bad-input test below really gets a status and no
-   crash.
-7. On success: `result = JS_NewObject(ctx)`, then per output `t = js_ort_tensor_wrap(ctx, out_values[i])` (it
-   takes ownership; on its failure release the values from `i + 1` on, free the result, rethrow),
-   `JS_DefinePropertyValueStr(ctx, result, out_names[i], t, JS_PROP_C_W_E)` (that consumes `t`). Return it.
-8. Free the three arrays on every exit path (use one `done:` label, no early `return` after the first
-   allocation).
-
-Output tensor `data` (completes the getter from task 1; `s->data` is undefined for an output):
-
-```c
-typedef struct { JSValue tensor; } JSOrtView;   /* keeps the Tensor object alive as long as the view exists */
-static void js_ort_view_free(JSRuntime* rt, void* opaque, void* ptr);   /* JS_FreeValueRT(tensor), js_free_rt(opaque) */
-```
-
-`data` getter for an output: `ort_api->GetTensorMutableData(value, &ptr)`; element count from
-`GetTensorTypeAndShape` + `GetTensorShapeElementCount` (release the info); `bytes = count * size`;
-`view = js_malloc(sizeof *view)`, `view->tensor = JS_DupValue(ctx, this_val)`;
-`js_typedarray_external(ctx, ptr, count, js_ort_types[t].array, js_ort_view_free, view)`; its callback runs
-exactly once, also when it fails, so on `JS_EXCEPTION` just return, never free the dup or the view yourself.
-**Do not cache the view in the tensor**: a cached view whose buffer holds the tensor is a reference cycle that
-QuickJS cannot see, and it leaks. A fresh view per read is the rule; document it (it is in `doc/native/ort.md`).
-If creating the view per read turns out to cost real time in the PoC loop, measure first, then consider
-`js_typedarray_copy` for outputs (a copy, no lifetime coupling) as the fallback and say so in the ChangeLog.
-
-Verify with a model that needs no download: none exists until the hand-built test model (later list), so this
-task is verified through task 4; until then, check only the error paths without a model: a released session,
-`run()` with no arguments, with `{}` against a session that needs an input (use u2netp from task 2),
-with `{ [name]: 42 }`, with an unknown key, a `Tensor` with wrong dims for the input (must throw `Error`
-with a code, not crash), `outputNames` with an unknown name. Each of those throws; none crashes.
+(Tasks 1 to 3, the float32 `Tensor`, the minimal `Session` and `session.run()`, are done: see the ChangeLog. The u2netp input name is `input.1`, its outputs are `1959` to `1965`; the first output is the probability map.)
 
 ### 4. The PoC script `tests/u2netp-poc.js`
 
