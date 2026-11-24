@@ -35,3 +35,13 @@
 
 	* .gitignore:
 	Ignore third_party/.
+
+2026-11-24  Roman Senn  <roman.l.senn@gmail.com>
+
+	TODO.md rewritten around a minimal proof of concept.
+
+	* TODO.md:
+	New goal: run u2netp.onnx (the salient-object model of qjs-opencv's
+	opencv-imgproc.js) from JavaScript with float32 Tensor, a minimal
+	Session and run(), checked against OpenCV dnn. Four ordered tasks,
+	a cut line, and everything else moved under "After the PoC works".
