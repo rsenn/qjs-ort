@@ -14,7 +14,7 @@ function vint(field, n) {
 
 function str(field, text) {
     const tag = (field << 3) | 2;
-    const bytes = new TextEncoder().encode(text);
+    const bytes = Uint8Array.from(text, (c) => c.charCodeAt(0));
     const out = new Uint8Array(2 + bytes.length);
     out[0] = tag;
     out[1] = bytes.length;

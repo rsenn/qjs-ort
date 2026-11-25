@@ -66,8 +66,7 @@ Facts verified against this tree, so you do not have to rediscover them:
   `options.providers` for `Session`; `ort.providers`; wide paths
   on Windows.
 2. **FindONNXRuntime, rest**: let CMake call `tools/fetch-onnxruntime.sh` itself when nothing is found
-  (`BUILD_ORT`-style option), the aarch64 and Termux variants (`fetch-onnxruntime.sh VERSION linux-arm64`,
-  Android needs the aar), and a cross build against `/mnt/data/sysroots/ort-1.32.0-aarch64`.
+  (`BUILD_ORT`-style option), and the Termux variant (Android needs the aar).
 - **opencv-imgproc.js**: an `ort` backend for `--dnn-model` next to `dnn` (qjs-opencv's file, ask first).
 - `runAsync()` through a worker thread and a promise (no JS calls from ORT threads).
 - Other execution providers (XNNPACK, NNAPI on the phone, CUDA on the workstation) through `options.providers`.
@@ -76,4 +75,4 @@ Facts verified against this tree, so you do not have to rediscover them:
   `tools/kconfig/check-options.sh`, requested from that session), through the N-API adapter on Bun/Deno
   (`qjs-api-wrap/napi-qjs-wrap.cpp`; the other adapters are `sm-`, `v8-`, `jsc-qjs-wrap.cpp` there). The quickjs
   repository wiring (`ORT:OFF` in `add_quickjs_modules_subdirs()`, `.gitmodules`) is done but uncommitted there.
-- Cross builds: Raspberry Pi (`cfg-aarch64`, the ORT 1.32.0 sysroot) and Termux (the Termux ORT package).
+- Cross build for Termux (the Termux ORT package). The Raspberry Pi build works, see `tools/aarch64-clang.toolchain.cmake`.

@@ -11,12 +11,15 @@ function vint(field, n) {
 }
 
 function str(field, text) {
-    const tag = (field << 3) | 2;
-    const bytes = new TextEncoder().encode(text);
-    const out = new Uint8Array(2 + bytes.length);
-    out[0] = tag;
-    out[1] = bytes.length;
-    out.set(bytes, 2);
+    const out = new Uint8Array(2 + text.length);
+
+    out[0] = (field << 3) | 2;
+    out[1] = text.length;
+
+    /* ASCII only, so that the test also runs on a plain qjs without TextEncoder */
+    for (let i = 0; i < text.length; i++)
+        out[2 + i] = text.charCodeAt(i);
+
     return out;
 }
 
@@ -179,7 +182,7 @@ throwsErrorWithCode(() => session.run({ a: badTensor, b: b1 }), 'run with dims [
 /* 7. bad model files */
 const badPath = '.tmp/bad.onnx';
 const fbad = std.open(badPath, 'wb');
-fbad.write(new TextEncoder().encode('not a model').buffer, 0, 11);
+fbad.write(Uint8Array.from('not a model', (c) => c.charCodeAt(0)).buffer, 0, 11);
 fbad.close();
 
 try {

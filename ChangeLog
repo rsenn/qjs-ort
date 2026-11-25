@@ -405,3 +405,36 @@
 	* README.md, TODO.md:
 	Status, API table, example and build sections written for what
 	exists, the examples item is removed from the TODO list.
+
+2026-11-25  Roman Senn  <roman.l.senn@gmail.com>
+
+	Cross build for the Raspberry Pi (aarch64), tested on the device.
+
+	* tools/aarch64-clang.toolchain.cmake:
+	New. Host clang with --target=aarch64-linux-gnu and lld against a
+	sysroot given as AARCH64_SYSROOT, no gcc cross package. It sets
+	CMAKE_ARCH_LIBDIR itself, because UseMultiArch asks the compiler for
+	-dumpmachine without the target flag and would name the host triplet.
+	With BUILD_QUICKJS=ON QuickJS is built for the target as well.
+
+	* CMakeLists.txt (INSTALL_ORT_LIBRARY):
+	The ONNX Runtime library is installed as the real file under its
+	SONAME, read with readelf (libonnxruntime.so.1 if that is not
+	possible). The glob of version names gave libonnxruntime.so.1.32.0
+	for a sysroot copy that has no libonnxruntime.so.1 link, which the
+	module could not load.
+
+	* tests/ort-test.js, types-test.js, session-options-test.js,
+	session-info-test.js:
+	The protobuf string helper and the bad-model bytes no longer use
+	TextEncoder, so that the tests run on a plain qjs as well as on qjsm
+	(the cross build has no qjsm).
+
+	* README.md, TODO.md:
+	A Raspberry Pi section in Build, the cross build item is removed.
+
+	Results: the four test files pass on the aarch64 qjs under qemu-user
+	(162 checks) and on a Raspberry Pi 4 (Debian, glibc 2.36): 162 checks,
+	and examples/gru/gru-loop.js matches Python within 6e-8. u2netp takes
+	about 2.3 s per 320x320 run there (0.3 s on the workstation), four
+	threads change nothing.

@@ -42,14 +42,25 @@ endif()
 option(INSTALL_ORT_LIBRARY "Install the ONNX Runtime libraries next to ort.so" ${_ort_install_default})
 
 if(INSTALL_ORT_LIBRARY AND BUILD_SHARED)
-  file(GLOB _ort_libs "${ORT_LIBRARY_DIR}/libonnxruntime.so.[0-9]*" "${ORT_LIBRARY_DIR}/libonnxruntime_providers_shared.so")
+  # ort.so asks for the SONAME of the library, and the files of a package do not always have a link of that name
+  # (a sysroot copy has libonnxruntime.so and libonnxruntime.so.<version>), so install the real file under the SONAME
+  find_program(_ort_readelf NAMES readelf "${CMAKE_READELF}")
+  set(_ort_soname "libonnxruntime.so.1")
 
-  # install(FILES) keeps a symlink as a symlink: install the file it points to under the name the loader looks for
-  foreach(_ort_lib ${_ort_libs})
-    get_filename_component(_ort_name "${_ort_lib}" NAME)
-    get_filename_component(_ort_real "${_ort_lib}" REALPATH)
-    install(FILES "${_ort_real}" DESTINATION "${QUICKJS_C_MODULE_DIR}" RENAME "${_ort_name}")
-  endforeach(_ort_lib)
+  if(_ort_readelf)
+    execute_process(COMMAND "${_ort_readelf}" -d "${ORT_LIBRARY}" OUTPUT_VARIABLE _ort_dynamic ERROR_QUIET)
+
+    if(_ort_dynamic MATCHES "SONAME[^\n]*\\[([^]]+)\\]")
+      set(_ort_soname "${CMAKE_MATCH_1}")
+    endif(_ort_dynamic MATCHES "SONAME[^\n]*\\[([^]]+)\\]")
+  endif(_ort_readelf)
+
+  get_filename_component(_ort_real "${ORT_LIBRARY}" REALPATH)
+  install(FILES "${_ort_real}" DESTINATION "${QUICKJS_C_MODULE_DIR}" RENAME "${_ort_soname}")
+
+  if(EXISTS "${ORT_LIBRARY_DIR}/libonnxruntime_providers_shared.so")
+    install(FILES "${ORT_LIBRARY_DIR}/libonnxruntime_providers_shared.so" DESTINATION "${QUICKJS_C_MODULE_DIR}")
+  endif(EXISTS "${ORT_LIBRARY_DIR}/libonnxruntime_providers_shared.so")
 endif(INSTALL_ORT_LIBRARY AND BUILD_SHARED)
 
 foreach(_t qjs-ort qjs-ort-static)

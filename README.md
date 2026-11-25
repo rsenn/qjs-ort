@@ -75,7 +75,22 @@ QUICKJS_MODULE_PATH=build/x86_64-linux-debug qjsm tests/ort-test.js
 cmake --install build/x86_64-linux-debug   # ort.so and libonnxruntime.so.1 into the QuickJS module directory
 ```
 
-Use `qjsm`, plain `qjs` cannot import native modules. The other tests are in `tests/`, run each the same way.
+Use `qjsm` for the scripts in `examples/`; the tests also run on a plain `qjs`. The other tests are in `tests/`, run each the
+same way.
+
+### Raspberry Pi (aarch64)
+
+Cross build with the host clang and lld, no gcc cross package. It needs a sysroot copied from the Pi and the linux-arm64
+ONNX Runtime (`tools/fetch-onnxruntime.sh 1.32.0 linux-arm64`):
+
+```sh
+AARCH64_SYSROOT=~/sysroots/pi cmake -S . -B build/aarch64-linux-gnu -DCMAKE_BUILD_TYPE=Release -DBUILD_QUICKJS=ON \
+  -DCMAKE_TOOLCHAIN_FILE=tools/aarch64-clang.toolchain.cmake -DORT_PREFIX=third_party/onnxruntime-linux-arm64-1.32.0
+cmake --build build/aarch64-linux-gnu
+DESTDIR=/tmp/stage cmake --install build/aarch64-linux-gnu    # qjs, libquickjs, ort.so, libonnxruntime.so.1
+```
+
+On a Raspberry Pi 4 the tests pass and `u2netp` runs in about 2.3 s per 320x320 image.
 
 ## Related
 
