@@ -17,7 +17,7 @@ ONNX Runtime bindings (onnxruntime-node, Python, Rust, Go).
 | Export | |
 |---|---|
 | `ort.version` **(PoC, done)** | The ONNX Runtime version string, `OrtGetApiBase()->GetVersionString()`, e.g. `'1.32.0'`. |
-| `ort.providers` | Array of the execution providers this build of ONNX Runtime has, `['CPUExecutionProvider']` at least. |
+| `ort.providers` | Array of the execution providers this build of ONNX Runtime has, as ONNX Runtime names them (`'CPUExecutionProvider'`, `'CUDAExecutionProvider'`, ...). Empty only when the library cannot tell. |
 | `Tensor`, `Session` **(PoC)** | The classes below. |
 
 ## Tensor **(PoC)**
@@ -31,15 +31,16 @@ new Tensor(type, data, dims)
 
 | Argument | |
 |---|---|
-| `type` | Element type name. Supported: `'float32'`, `'float64'`, `'int32'`, `'int64'`, `'uint8'`, `'bool'`. Planned: `'string'`, `'float16'`. |
+| `type` | Element type name. Supported: `'float32'`, `'float64'`, `'int32'`, `'int64'`, `'uint8'`, `'bool'`, `'string'`. Planned: `'float16'`. |
 | `data` | The matching typed array (`Float32Array` for `'float32'`; `Float64Array` for `'float64'`; `Int32Array` for `'int32'`; `BigInt64Array` for `'int64'`; `Uint8Array` for `'uint8'` and `'bool'`). It is **not copied**: writing to it changes the tensor, and the tensor keeps it alive. For `'bool'` the data is a `Uint8Array` with values 0 or 1. For `'int64'` the data is a `BigInt64Array`. |
+| | `'string'` is the exception: `data` is an `Array` of strings (UTF-8 in the tensor), one per element, and it **is copied**; the tensor keeps no reference to the array. A non-string element or a string with a NUL byte is a `TypeError`, a length that does not match `dims` a `RangeError`. |
 | `dims` | Array of non-negative integers. The product must equal `data.length`, else `RangeError`. `[]` is a scalar (one element). |
 
 | Member | |
 |---|---|
 | `tensor.type` | The element type name, e.g. `'float32'`. |
 | `tensor.dims` | A new plain `Array` of numbers each time. |
-| `tensor.data` | A typed array over the tensor's memory, no copy. For an input tensor it is the array passed to the constructor. For an output tensor a new view each time, and it keeps the tensor alive, so it stays valid after the tensor object is gone. Copy with `.slice()` when the result must outlive the next `run`. |
+| `tensor.data` | For a `'string'` tensor a new `Array` of strings each time (changing it does not change the tensor). Otherwise a typed array over the tensor's memory, no copy. For an input tensor it is the array passed to the constructor. For an output tensor a new view each time, and it keeps the tensor alive, so it stays valid after the tensor object is gone. Copy with `.slice()` when the result must outlive the next `run`. |
 | `tensor[Symbol.toStringTag]` | `'Tensor'`. |
 
 Errors: wrong `type` name or a `data` that is not the typed array the type needs: `TypeError`. Dims that do not
@@ -58,7 +59,7 @@ const session = new Session('u2netp.onnx');
 | `new Session(pathOrBuffer, options?)` | Loads the model from a file path (string) or from an `ArrayBuffer` or typed array holding the model bytes (not copied, the array may change afterwards). Throws `Error` (with `.code`, see Errors) when the file is missing or the bytes are not a model, `TypeError` for any other first argument. |
 | `session.inputNames` | `Array` of strings, in model order. |
 | `session.outputNames` | `Array` of strings, in model order. |
-| `session.inputs` | `Array` of objects `{ name, type, dims }` in model order, one per input. `name` is the input name string. `type` is the element type name from the known type table, or `undefined` when the element type has no row in the table (e.g. `string`, `float16`, ...) or the value is not a tensor (a sequence or a map). `dims` is an `Array` of numbers, a dynamic dimension is `-1` as ONNX Runtime reports it, a scalar is `[]`; `undefined` when the value is not a tensor. A new `Array` is returned each time the property is read. |
+| `session.inputs` | `Array` of objects `{ name, type, dims }` in model order, one per input. `name` is the input name string. `type` is the element type name from the known type table, or `undefined` when the element type has no row in the table (e.g. `float16`, ...) or the value is not a tensor (a sequence or a map). `dims` is an `Array` of numbers, a dynamic dimension is `-1` as ONNX Runtime reports it, a scalar is `[]`; `undefined` when the value is not a tensor. A new `Array` is returned each time the property is read. |
 | `session.outputs` | `Array` of objects `{ name, type, dims }` in model order, one per output. Same semantics as `inputs`. |
 | `session.run(feeds, outputNames?)` | Runs the model, synchronously. `feeds` is an object, input name to `Tensor`; every model input must be present, no others. `outputNames` is an array of output names, default all. Returns an object, output name to `Tensor`. |
 | `session.release()` | Frees the native session now. Later `run()`, `inputs` and `outputs` throw `Error('session released')`; calling `release()` twice is fine. Without it the garbage collector frees the session. `inputNames` and `outputNames` keep working after release. |
@@ -78,13 +79,16 @@ Options (second argument, an object, all optional; unknown names are ignored):
 | `intraOpThreads`, `interOpThreads` | Thread counts, a non-negative integer, `0` is the ONNX Runtime default. `RangeError` otherwise. |
 | `graphOptimization` | `'disable'`, `'basic'`, `'extended'` or `'all'` (default). `TypeError` otherwise. |
 | `logLevel` | `'verbose'`, `'info'`, `'warning'`, `'error'` or `'fatal'`. `TypeError` otherwise. |
+| `providers` | Array of execution providers, in priority order: a name or `{ name, ...options }`. Names: `'cpu'` (always the last fallback, naming it only states the intent), `'cuda'`, `'xnnpack'`, `'nnapi'`, `'coreml'`, `'qnn'`, `'openvino'`. The other properties of an object go to ONNX Runtime as strings under their own names (`{ name: 'cuda', device_id: 1 }`, `{ name: 'xnnpack', intra_op_num_threads: 2 }`); values are strings, numbers or booleans. `nnapi` takes only `flags` (a number). Every provider named must be in the build: there is no silent fallback, the constructor throws the `Error` of ONNX Runtime (with `.code`) for one that is not, `TypeError` for a name this module does not know, a wrong kind of entry or a bad option value. Check `ort.providers` first to choose. |
 
 Planned (not PoC):
 
 | Member | |
 |---|---|
-| `options.providers` | Array of provider names or `{ name, ...providerOptions }`, tried in order: `'cpu'`, `'xnnpack'`, `'nnapi'`, `'cuda'`. |
 | `session.runAsync(feeds, outputNames?)` | `Promise` version, the model runs on a worker thread; ORT never calls into JS. |
+
+The model path is UTF-8; on Windows it is converted to the wide string ONNX Runtime wants (compiled, not yet run
+there).
 
 ## Errors
 

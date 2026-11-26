@@ -1,0 +1,8 @@
+- init-api-env-failure-leaves-api-set: js_ort_init_api() stores the OrtApi pointer in ort_api before it creates
+  the OrtEnv and the CPU memory info, and returns early on `if(ort_api)`. When CreateEnv or CreateCpuMemoryInfo
+  fails once (low memory, a broken library), every later Tensor or Session constructor skips the init, passes a
+  NULL ort_env or ort_cpu to ONNX Runtime and may crash. Found by reading the code while adding the providers
+  option; not reproducible on a healthy library.
+
+      // needs a failing CreateEnv; none known
+

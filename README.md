@@ -14,10 +14,11 @@ const { next } = session.run({ context: input });
 console.log(next.dims, next.data);       // a Float32Array view of the result
 ```
 
-> **Status: works, early.** `Tensor` (float32, float64, int32, int64, uint8, bool), `Session` (from a file or
-> from bytes, thread and optimisation options, input and output metadata) and a synchronous `session.run()` are
-> implemented and tested; `u2netp.onnx` gives the same result as OpenCV `dnn`. Only the CPU execution provider
-> is used so far. See [TODO.md](TODO.md) for what comes next and [doc/native/ort.md](doc/native/ort.md) for the
+> **Status: works, early.** `Tensor` (float32, float64, int32, int64, uint8, bool, string), `Session` (from a file or
+> from bytes, thread, optimisation and execution provider options, input and output metadata) and a synchronous `session.run()` are
+> implemented and tested; `u2netp.onnx` gives the same result as OpenCV `dnn`. `ort.providers` lists the execution
+> providers of the library, `options.providers` selects them (only CPU was run here; CUDA, XNNPACK and NNAPI are
+> wired but need a build of ONNX Runtime that has them). See [TODO.md](TODO.md) for what comes next and [doc/native/ort.md](doc/native/ort.md) for the
 > full API page.
 
 ## Why
@@ -62,14 +63,14 @@ Python, Rust, Go), which agree on this shape.
 | Needed | For |
 |---|---|
 | QuickJS with `qjsm` and its headers | building and running the module |
-| ONNX Runtime 1.x (`onnxruntime_c_api.h`, `libonnxruntime`) | linking `ort.so`; a copy can be fetched from the NuGet package |
+| ONNX Runtime 1.x (`onnxruntime_c_api.h`, `libonnxruntime`) | linking `ort.so`; a copy can be fetched (NuGet package on Linux, Maven Central AAR on Android and Termux), by hand or with `-DBUILD_ORT=ON` |
 | CMake 3.5+ | building |
 
 ## Build
 
 ```sh
-tools/fetch-onnxruntime.sh                 # ONNX Runtime into third_party/, or pass -DORT_PREFIX=...
-cmake -B build/x86_64-linux-debug -DCMAKE_BUILD_TYPE=Debug
+tools/fetch-onnxruntime.sh                 # ONNX Runtime into third_party/, or pass -DORT_PREFIX=..., or -DBUILD_ORT=ON below
+cmake -B build/x86_64-linux-debug -DCMAKE_BUILD_TYPE=Debug     # -DBUILD_ORT=ON runs the script when none is found
 cmake --build build/x86_64-linux-debug
 QUICKJS_MODULE_PATH=build/x86_64-linux-debug qjsm tests/ort-test.js
 cmake --install build/x86_64-linux-debug   # ort.so and libonnxruntime.so.1 into the QuickJS module directory
@@ -91,6 +92,19 @@ DESTDIR=/tmp/stage cmake --install build/aarch64-linux-gnu    # qjs, libquickjs,
 ```
 
 On a Raspberry Pi 4 the tests pass and `u2netp` runs in about 2.3 s per 320x320 image.
+
+### Android and Termux
+
+The Android ONNX Runtime comes as an AAR, which `tools/fetch-onnxruntime.sh` unpacks too (`android-arm64`, `android-arm`,
+`android-x86_64`, `android-x86`; on Termux the script picks the machine's one by itself). Its `libonnxruntime.so` has no
+dependency but the system libraries, so it runs on Termux. In Termux:
+
+```sh
+cmake -B build/termux -DCMAKE_BUILD_TYPE=Release -DBUILD_ORT=ON   # fetches android-arm64 into third_party/
+cmake --build build/termux
+```
+
+Not tried on a phone yet. `{ providers: [{ name: 'nnapi', flags: 1 }] }` selects NNAPI there.
 
 ## Related
 

@@ -28,7 +28,7 @@ configure_quickjs()
 include_directories(${ORT_INCLUDE_DIR} ${QUICKJS_INCLUDE_DIR})
 link_directories(${ORT_LIBRARY_DIR} ${QUICKJS_LIBRARY_DIR})
 
-set(ort_LIBRARIES ${ORT_LIBRARY})
+set(ort_LIBRARIES ${ORT_LIBRARY} ${CMAKE_DL_LIBS})
 
 make_module(ort quickjs-ort.c js-utils.c js-utils.h)
 

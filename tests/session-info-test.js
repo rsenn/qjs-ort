@@ -249,11 +249,11 @@ console.log('\n=== 4. string (type 8) ===');
     const session = new Session(path);
 
     const inputs = session.inputs;
-    check('inputs type undefined (string not in table)', inputs[0].type === undefined);
+    check('inputs type string', inputs[0].type === 'string');
     check('inputs dims [2]', deepEqual(inputs[0].dims, [2]));
 
     const outputs = session.outputs;
-    check('outputs type undefined', outputs[0].type === undefined);
+    check('outputs type string', outputs[0].type === 'string');
     check('outputs dims [2]', deepEqual(outputs[0].dims, [2]));
 
     session.release();
