@@ -598,3 +598,23 @@
 	* TODO.md:
 	The Case 6 entry names the book domain.
 
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	Bring doc/ up to date with the code.
+
+	* doc/native/ort.md:
+	The page describes what exists: the PoC marks and the rough-sketch
+	note are gone, a section on BUILD_ORT and the Android and Termux
+	runtimes, the planned list has runAsync, float16 and IoBinding.
+
+	* doc/nn.md:
+	Rewritten as the reference of nn/: file layout, the .nnw format, the
+	layers, measured speed, the Case 4 workflow and the quirks found
+	(the stk reverbs, os.seek).
+
+	* doc/AM-DNN-CASES.md:
+	A status block, the measured speed budget in place of the wrong
+	estimate, and Case 4 described as built (18 parameters, 48 mels at
+	22.05 kHz, the conv model with time-flattened output, the dataset
+	sizes, the milestones done and open).
+

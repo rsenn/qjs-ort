@@ -1,8 +1,13 @@
 # Music/Audio (and two graphics) deep learning use cases
 
-Decided 2026-11-26: models are trained in PyTorch (audio-ml venv), exported with `nn/export.py` to `.nnw`, and run
-by the pure-JS `nn/nn.js` (see `doc/nn.md`). qjs-ort (ONNX Runtime) is the cross-check and the fallback for
-models too big for pure JS. Audio and MIDI plumbing comes from the qjs-sound modules already installed:
+Decided 2026-11-26: models are trained in PyTorch (venv `~/.venvs/audio-ml`, CUDA works), exported with
+`nn/export.py` to `.nnw`, and run by the pure-JS `nn/nn.js` (see [`nn.md`](nn.md)). qjs-ort (ONNX Runtime, see
+[`native/ort.md`](native/ort.md)) is the cross-check and the way to run models too big for pure JS: Cases 5 and 6
+need it.
+
+**Status (2026-11-26):** `nn/nn.js` and its tests are done; Case 4 is built up to training (patch, features, dataset
+renderer, trainer, JS model; the JS inference matches PyTorch to 6e-8 on a smoke-test model) and the dataset is
+rendering; Cases 1 to 3 are plans only; Cases 5 and 6 are plans only. `TODO.md` has the order. Audio and MIDI plumbing comes from the qjs-sound modules already installed:
 `aubio.so` (onset, pitch, tempo, notes, MFCC, filterbank), `sndfile.so` (read/write audio), `portmidi.so`
 (MIDI in/out), `portaudio.so` (realtime), `stk.so`, `sndobj.so`, `labsound.so` (synths/effects that can be
 rendered offline for dataset generation), `rubberband.so`/`samplerate.so` (augmentation).
@@ -19,12 +24,13 @@ The original list:
 Order matters: the shared pieces make every case cheaper, so they come first.
 
 1. **Dataset layout.** `data/<case>/` (git-ignored, big) holds raw material, `data/<case>/cache/*.npz` the
-   extracted features. Every script takes `--seed`, every dataset has a `manifest.json` (source files, feature
-   config, git revision of the extractor) so a model can be reproduced.
+   extracted features. Every script takes a seed, every dataset records its source and feature config so a model
+   can be reproduced (Case 4: the `.nnw` meta holds the spec, feature config, count and seed; a `manifest.json` per
+   case comes when a case has more than one source).
 2. **One feature definition, two implementations.** Features are computed in JS at inference time (aubio via
    `aubio.so`, or plain JS DSP) and must equal what training saw. Rule: the extractor is written **once in JS**,
-   run under qjsm to dump the training features (`tools/extract-<case>.js` writes `.nnw`/`.npy`-style float32
-   files that PyTorch loads with numpy), so there is no Python port to drift. Where Python needs the
+   run under qjsm to dump the training features (`tools/render-dataset.js` writes `.nnw` float32 files that PyTorch
+   loads with `nn/nnw.py`), so there is no Python port to drift. Where Python needs the
    same function (e.g. synthetic data generation), a fixture test compares both on a few seconds of audio.
 3. **Train/export/verify loop** per model, always the same four steps:
    `train.py` -> `export.py` (`.nnw` + `meta` with feature config, vocab, normalisation stats) ->
@@ -32,9 +38,12 @@ Order matters: the shared pieces make every case cheaper, so they come first.
    (tolerance 1e-4) -> optional ONNX export compared via `ort.so` (catches layout mistakes).
 4. **Normalisation lives in the file.** Means/stds, vocabularies, and sample rate go into `meta`, never into
    JS constants.
-5. **Speed budget.** Measure early (TODO item 6): a 2-layer GRU(256) step costs about 0.8 MFLOP; QuickJS does
-   roughly 30-100 MFLOP/s in this kind of loop, so ~10-30 ms per step. Budgets below are checked against that;
-   if a case needs more, add a native `matvec` (`ort`-independent, tiny) rather than growing the model.
+5. **Speed budget (measured).** This `qjsm` runs about 7 M simple loop iterations per second, which is a few M
+   multiply-adds per second: the 360 k-parameter Case 4 model (about 2.3 M MAC) took 1.7 s per inference on a busy
+   machine, a 2-layer GRU(256) step (about 0.8 M MAC) is estimated at several hundred ms and still to be measured
+   (TODO item 6). Earlier drafts assumed 30-100 MFLOP/s, which was wrong by an order of magnitude. Rule: pure JS
+   for features, small MLPs and one GRU step; anything bigger goes to `ort.so`, or a native `matvec` helper is added
+   (tiny, independent of `ort`) rather than shrinking the model to fit.
 6. **Metrics first.** Every case defines a dumb baseline (below) and a number the model must beat, otherwise
    it is not worth shipping.
 
@@ -221,6 +230,15 @@ Given a target audio clip (a sample, a recording), predict the parameters of a g
 rendering with them sounds like the target. First target: one specific synth patch architecture (the one the
 author uses most; a `stk`/`labsound`/`sndobj` patch to begin with, since those render offline from qjsm).
 
+### Status (2026-11-26)
+Built: the STK patch (`nn/synths/stkpatch.js`, 18 parameters in `stkpatch.json`), the JS mel front end
+(`nn/features.js`), the dataset renderer (`tools/render-dataset.js`), the trainer (`train/synth-params.py`) and the JS
+model (`nn/models/synth-params.js`, checked against PyTorch to 6e-8 on a smoke-test model). Rendering: 8 x 6000 training
+examples, 2000 validation and 300 test, about 1.3 examples per second per process with ten processes on eight cores
+(a render takes about 0.1 s, the features about 0.3 s). The full 60-epoch training waits for the shards
+(`run-train.sh`, log `out/train.log`). Not yet: `tools/match-synth.js`, `tools/eval-synth.js`, the baselines, 4b.
+What building it taught is in [`nn.md`](nn.md) "Quirks found" (the reverb bug that corrupted the first dataset).
+
 ### Why this comes first
 Data is free and exactly labelled: render the synth with random parameters, the parameters are the label.
 It exercises the whole pipeline (render, features, train, export, JS inference) with no external data.
@@ -234,29 +252,35 @@ It exercises the whole pipeline (render, features, train, export, JS inference) 
 - Differentiable synth (DDSP-style) is out of scope for the first version; revisit if 4b is too slow.
 
 ### Parameter space
-Write a **spec** per synth, `synths/<name>.json`: parameter name, range, scale (linear/log), type
+Write a **spec** per synth, `nn/synths/<name>.json` (as built: `stkpatch.json`): parameter name, range, scale (linear/log), type
 (continuous/choice/bool). Continuous ones are normalised to 0..1 (log where appropriate); choices become
 softmax heads. The spec travels in the `.nnw` meta, so the JS side denormalises and applies it.
-Start with 8-16 parameters (oscillator shape/mix, detune, filter cutoff/resonance, envelope A/D/S/R, LFO rate/
-depth); effects: delay time/feedback/mix, reverb size/damp, drive amount.
+As built, 18 parameters: saw/square mix, a detuned second saw (level, cents), sub level, noise level, a filter type
+(choice: low-pass, band-pass, high-pass), cutoff and resonance, filter envelope amount and decay, amplitude A/D/S/R,
+echo time and mix, reverb time and mix. No LFO yet. Switch-like parameters are sampled as exactly zero a share of the
+time, so the model learns "absent".
 
 ### Data generation
-`tools/render-synth.js` (qjsm, offline): sample parameters from the spec (uniform in normalised space, plus
-oversampling of musically useful regions), render a fixed protocol - e.g. a single note C3, 1.5 s, velocity 100 -
-and write the audio and the parameters. 100k-500k examples (disk: feature files, not audio). Randomise the
-note pitch in the protocol and give the pitch as an extra input so patches transfer between pitches.
+`tools/render-dataset.js` (qjsm, offline): sample parameters from the spec (uniform in normalised space, zeros for
+the switch-like ones), render a fixed protocol - as built: one note, 1.2 s, gate 0.6 s, 22.05 kHz, MIDI 36 to 84 chosen
+at random - and write the features and the labels (not the audio). Example i has its own seed, so a shard can be
+regenerated alone. As built 50 000 examples; 100k-500k is the next step if the model is data-limited. The pitch is an
+extra input so patches transfer between pitches.
 Augment the target side with small noise, level changes, short reverb so real recordings are not out of
 distribution. Identical parameters rendering identical audio: a test checks determinism and seeds.
 
 ### Features
-Log-mel spectrogram (64 mels, hop 512, 3 s max -> ~130 frames x 64) plus a global feature vector (MFCC means,
-spectral centroid, flatness, attack time, RMS envelope descriptor). The mel front end is **JS code shared
+As built: log-mel spectrogram, 48 mels, 1024-point FFT, hop 512, 22.05 kHz, 1.2 s -> 50 frames x 48, absolute levels
+(not normalised per clip) and the MIDI pitch. A global feature vector (MFCC means, spectral centroid, flatness, attack
+time, RMS envelope) is not built; the time-flattened conv output already carries the envelope. The mel front end is **JS code shared
 between training dump and inference** (common groundwork item 2).
 
 ### Model
-Conv1d stack over time (64 -> 96 -> 128 channels, stride 2, kernel 5, ReLU) -> global mean+max pool -> concat
-with pitch and global vector -> MLP 256 -> heads: `params` regression 0..1 (sigmoid, loss: MSE or L1) and one
-softmax per choice parameter. About 0.2-0.4M parameters; runs in ~10-50 ms in qjsm (checked in the speed budget).
+As built: Conv1d stack over time (48 -> 64 stride 1, 64 -> 96 stride 2, 96 -> 64 stride 2, kernel 5, ReLU),
+**flattened in time order** (not pooled, because pooling would lose the envelope) and joined with the pitch -> two
+MLP layers of 256 -> one head: sigmoid outputs for the float parameters (L1 loss) and a softmax block for the choice
+parameter (cross-entropy). 360 k parameters; about 2.3 M MAC per inference, which is seconds in pure JS (speed budget
+above) and milliseconds on `ort.so`.
 Better loss than raw parameter error: **audio-feature loss** - render the predicted parameters in the training
 loop is too slow, so use parameter loss for training and the feature distance only for evaluation and 4b.
 
@@ -269,10 +293,11 @@ loop is too slow, so use parameter loss for training and the feature distance on
 - Out-of-domain: render targets from a *different* patch family and see graceful failure (confidence).
 
 ### Milestones
-1. `synths/<first>.json` and `tools/render-synth.js` with the determinism test.
-2. Mel front end in JS + a Python side loader; dump 100k examples; feature stability test.
-3. `train/synth-params.py` MLP-only baseline (global features only), then the conv model.
-4. Export + JS `tools/match-synth.js target.wav -> params.json`, test with stored examples.
+1. Done: `nn/synths/stkpatch.json` and the renderer; determinism checked by hand, a test file is still to write.
+2. Done: mel front end in JS (`tests/nn-features-test.js`), a Python loader (`nn/nnw.py`); 50 000 examples rendering.
+3. Built, not yet trained on the full set: `train/synth-params.py` (the conv model directly, no MLP-only baseline).
+4. Export and the JS model are done and checked (`tests/synth-params-test.js`); `tools/match-synth.js target.wav ->
+   params.json` is to write.
 5. Spectral-distance evaluator and the nearest-neighbour baseline; target: median distance below baseline.
 6. 4b refinement loop and the second synth/effect; then effects chains.
 
@@ -544,7 +569,7 @@ pages, whole pages with several figures handled automatically (the figure is cut
 ## Priority and dependencies
 
 1. Common groundwork items 1-3, and the speed measurement (TODO item 6).
-2. **Case 4** (free data, full pipeline, immediate useful result).
+2. **Case 4** (free data, full pipeline, immediate useful result) - in progress, see its status.
 3. **Case 2** (reuses 4's rendering and feature tooling; produces tokens for Case 1).
 4. **Case 1** (needs data from 2 for audio-derived material, or MIDI directly - can start in parallel once the
    event tokeniser exists, it does not depend on audio).

@@ -1,8 +1,7 @@
 # ort - ONNX Runtime for QuickJS
 
-> **Rough sketch.** This page is the API as designed, written before the code. Entries marked **(PoC)** are
-> what the first milestone implements (see `TODO.md`); the rest is planned and may change. Update this page
-> with every API change, and drop the marks when the code exists.
+> The API as implemented in `quickjs-ort.c`; what is still planned is listed under "Planned" below and in
+> `TODO.md`. Update this page with every API change.
 
 ```js
 import * as ort from 'ort';
@@ -16,11 +15,11 @@ ONNX Runtime bindings (onnxruntime-node, Python, Rust, Go).
 
 | Export | |
 |---|---|
-| `ort.version` **(PoC, done)** | The ONNX Runtime version string, `OrtGetApiBase()->GetVersionString()`, e.g. `'1.32.0'`. |
+| `ort.version` | The ONNX Runtime version string, `OrtGetApiBase()->GetVersionString()`, e.g. `'1.32.0'`. |
 | `ort.providers` | Array of the execution providers this build of ONNX Runtime has, as ONNX Runtime names them (`'CPUExecutionProvider'`, `'CUDAExecutionProvider'`, ...). Empty only when the library cannot tell. |
-| `Tensor`, `Session` **(PoC)** | The classes below. |
+| `Tensor`, `Session` | The classes below. |
 
-## Tensor **(PoC)**
+## Tensor
 
 A typed, shaped block of numbers. Inputs wrap a typed array without copying; outputs of `Session.run()` own the
 memory ONNX Runtime allocated.
@@ -46,9 +45,9 @@ new Tensor(type, data, dims)
 Errors: wrong `type` name or a `data` that is not the typed array the type needs: `TypeError`. Dims that do not
 match `data.length`, or a negative dim: `RangeError`.
 
-## Session **(PoC)**
+## Session
 
-A loaded model. CPU execution provider, default options.
+A loaded model. The CPU execution provider unless `options.providers` names others.
 
 ```js
 const session = new Session('u2netp.onnx');
@@ -81,11 +80,12 @@ Options (second argument, an object, all optional; unknown names are ignored):
 | `logLevel` | `'verbose'`, `'info'`, `'warning'`, `'error'` or `'fatal'`. `TypeError` otherwise. |
 | `providers` | Array of execution providers, in priority order: a name or `{ name, ...options }`. Names: `'cpu'` (always the last fallback, naming it only states the intent), `'cuda'`, `'xnnpack'`, `'nnapi'`, `'coreml'`, `'qnn'`, `'openvino'`. The other properties of an object go to ONNX Runtime as strings under their own names (`{ name: 'cuda', device_id: 1 }`, `{ name: 'xnnpack', intra_op_num_threads: 2 }`); values are strings, numbers or booleans. `nnapi` takes only `flags` (a number). Every provider named must be in the build: there is no silent fallback, the constructor throws the `Error` of ONNX Runtime (with `.code`) for one that is not, `TypeError` for a name this module does not know, a wrong kind of entry or a bad option value. Check `ort.providers` first to choose. |
 
-Planned (not PoC):
+Planned:
 
 | Member | |
 |---|---|
 | `session.runAsync(feeds, outputNames?)` | `Promise` version, the model runs on a worker thread; ORT never calls into JS. |
+| `'float16'` tensors, `IoBinding` | Half precision (QuickJS has no half-float typed array) and reuse of output buffers in a realtime loop. |
 
 The model path is UTF-8; on Windows it is converted to the wide string ONNX Runtime wants (compiled, not yet run
 there).
@@ -100,6 +100,15 @@ binding can see itself are `TypeError` (wrong kind of argument, unknown or missi
 
 For a tensor of type `'bool'` the data is a `Uint8Array` (one byte per element, 0 or 1) in both
 directions; no conversion is done. For a tensor of type `'int64'` the data is a `BigInt64Array`.
+
+## Building and the library
+
+`cmake -B build/... -DBUILD_ORT=ON` fetches a prebuilt ONNX Runtime with `tools/fetch-onnxruntime.sh` when none is
+found (`ORT_VERSION` picks the version, default 1.32.0): the NuGet package for `linux-x64` and `linux-arm64`, the
+Maven Central AAR for `android-arm64`, `android-arm`, `android-x86_64`, `android-x86` (also what Termux uses,
+chosen by the script from `uname`). `-DORT_PREFIX=<dir>` names an existing install (`include/`, `lib/`). The
+fetched CPU packages have no CUDA, XNNPACK or NNAPI provider: `options.providers` then throws the `Error` of
+ONNX Runtime for it, see `ort.providers` for what is there.
 
 ## Threads
 
