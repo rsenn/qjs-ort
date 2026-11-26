@@ -438,3 +438,119 @@
 	and examples/gru/gru-loop.js matches Python within 6e-8. u2netp takes
 	about 2.3 s per 320x320 run there (0.3 s on the workstation), four
 	threads change nothing.
+
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	Add nn/, pure-JS inference for models trained in PyTorch.
+
+	* nn/nn.js:
+	Linear, Embedding, LayerNorm, Conv1d, GRU/LSTM (layers,
+	bidirectional, carried state), activations, softmax, sample and
+	the .nnw loader, all in the PyTorch parameter layout.
+
+	* nn/export.py:
+	Writes a state_dict (or a dict of arrays) as .nnw: magic, JSON
+	header, float32 blob. Needs only numpy.
+
+	* tests/nn-test.js, tests/nn/make-fixtures.py, tests/nn/nn-test.nnw:
+	Every layer against an independent numpy implementation, 18 checks,
+	max diff 2.4e-7.
+
+	* TODO.md, doc/AM-DNN-CASES.md:
+	The nn/ plan, in order of use case.
+
+	* doc/AM-DNN-CASES.md:
+	Detailed plan for each of the four use cases: data, features, model,
+	inference, evaluation, milestones, risks.
+
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	Case 4 groundwork: an STK patch, a JS mel front end, the dataset
+	renderer, the trainer and the JS inference model.
+
+	* nn/synths/stkpatch.js, stkpatch.json:
+	Subtractive patch from STK generators (saw/square, detuned saw, sub,
+	noise, BiQuad with envelope, ADSR, Echo, JCRev), 18 parameters in a
+	spec; render() is deterministic, about 100 ms per 1.2 s note at
+	22.05 kHz. FreeVerb was left out: it renders differently on every
+	call (uninitialised state), JCRev is stable.
+
+	* nn/synths/params.js, nn/features.js:
+	Label normalisation, seeded sampling; radix-2 FFT with tables, a real
+	signal power spectrum in one half-size FFT, mel filterbank, log-mel.
+
+	* tools/render-dataset.js, nn/nnw.py:
+	Writes features, labels and pitch as .nnw, per-example seeds so a
+	shard can be regenerated; nnw.py reads them in numpy.
+
+	* train/synth-params.py, nn/models/synth-params.js:
+	Conv1d x3 and MLP on log-mel plus pitch; JS inference with the same
+	layer names, tests/synth-params-test.js compares it with PyTorch.
+
+	* tests/nn-features-test.js:
+	rfftPower against a DFT, mel band of a 1 kHz sine, label roundtrip.
+
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	Fix the reverb in the STK patch, which corrupted half of the dataset.
+
+	* nn/synths/stkpatch.js:
+	JCRev gave NaN and levels of several hundred dB when it processed a
+	mono StkFrames buffer (it is a stereo effect), which made the first
+	validation loss NaN. The reverb now ticks per sample and folds the
+	stereo output to mono; render() throws on a non-finite sample. The
+	dataset was rendered again.
+
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	String tensors, execution providers, the Windows model path and
+	fetching ONNX Runtime from CMake, also for Android and Termux.
+
+	* quickjs-ort.c (js_ort_string_tensor, js_ort_tensor_strings,
+	js_ort_tensor_ctor, js_ort_tensor_get_data):
+	Tensor('string', Array, dims). ONNX Runtime copies the strings, so the
+	tensor keeps no reference to the Array; data is a new Array of strings
+	on every read. A non-string element, a NUL byte and a length that does
+	not match dims throw before anything is created. session.inputs and
+	outputs now report 'string' instead of undefined.
+
+	* quickjs-ort.c (js_ort_providers, js_ort_session_providers,
+	js_ort_provider_entry, js_ort_provider_append):
+	ort.providers lists GetAvailableProviders. options.providers takes
+	names or { name, ...options } in priority order (cpu, cuda, xnnpack,
+	nnapi, coreml, qnn, openvino); options go to ONNX Runtime as strings.
+	CUDA uses its options object. NNAPI has no name in the generic call, so
+	OrtSessionOptionsAppendExecutionProvider_Nnapi is looked up with dlsym
+	and takes the option flags. A provider that is not in the build throws
+	ONNX Runtime's own Error with its code, there is no silent fallback.
+
+	* quickjs-ort.c (js_ort_session_from_file):
+	The model path is converted from UTF-8 to wchar_t on Windows, which
+	replaces the #error. Compiled with mingw, not run on Windows.
+
+	* CMakeLists.txt:
+	${CMAKE_DL_LIBS} for dlsym on glibc before 2.34.
+
+	* cmake/FindONNXRuntime.cmake:
+	BUILD_ORT runs tools/fetch-onnxruntime.sh when nothing is found and
+	searches again, ORT_VERSION picks the version. ort_runtime_name()
+	names the target's runtime (linux-x64, linux-arm64, android-<arch>,
+	also on Termux). The copy in third_party/ is chosen by that name, so a
+	linux-arm64 or android directory next to the linux-x64 one is no
+	longer taken by accident.
+
+	* tools/fetch-onnxruntime.sh:
+	Android runtimes from the Maven Central AAR (headers/ and
+	jni/<abi>/libonnxruntime.so). Without RUNTIME the machine's own is
+	used (uname), which is what Termux needs. The SONAME link is only
+	made when the SONAME differs.
+
+	* tests/string-test.js, tests/providers-test.js,
+	tests/session-info-test.js, README.md, doc/native/ort.md, TODO.md,
+	BUGS:
+	New tests (19 and 19 checks), the string case of session-info-test
+	now expects 'string'. Docs describe the new surface. A leak check
+	(200 against 5000 rounds of every new path under qjsm --dump) shows
+	identical object counts. BUGS has init-api-env-failure-leaves-api-set,
+	found while reading js_ort_init_api.
+

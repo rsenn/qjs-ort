@@ -13,7 +13,30 @@ Done so far, see the ChangeLog: CMake skeleton, `FindONNXRuntime.cmake`, `tools/
 
 ## In progress
 
-- (nothing)
+- **Case 4 (nn/)**: paused for the detour that is now done (ort surface and FindONNXRuntime, see ChangeLog).
+  `run-train.sh` waits for the shards in the background (log `out/train.log`); when it is done: JS check,
+  `tools/match-synth.js`, `tools/eval-synth.js`, see the nn/ section.
+
+## nn/: PyTorch-trained models, pure-JS inference (decided 2026-11-26)
+
+Use cases are in `doc/AM-DNN-CASES.md`. Training happens in PyTorch (the audio-ml venv), inference is `nn/nn.js`
+(layers, PyTorch parameter layout) reading `.nnw` files written by `nn/export.py`; ORT stays the cross-check
+for models that can be exported to ONNX. Done: format, Linear, Embedding, LayerNorm, Conv1d, GRU/LSTM
+(multi-layer, bidirectional, carried state), activations, softmax, sampling; numpy-reference test
+`tests/nn-test.js`. Next, in this order:
+
+1. **Use case 4 (synth parameters from audio), IN PROGRESS** (STK patch `nn/synths/stkpatch.js`, 18 parameters).
+   Done: patch + spec (JCRev fix, see ChangeLog), JS mel front end, dataset renderer, trainer, JS model, venv
+   `~/.venvs/audio-ml` with PyTorch (CUDA works). Running: shards re-rendering into `data/synth/` (8 x 6000 train,
+   val 2000, test 300) and `run-train.sh` (smoke test, then 60 epochs, log `out/train.log`). Still to write:
+   `tools/match-synth.js` (wav -> params -> render), `tools/eval-synth.js` (spectral distance vs random and
+   nearest-neighbour baselines on test.nnw), a stkpatch determinism test, the 4b refinement search.
+2. Check the layers against real torch output once (`export.py` + `torch.nn.GRU` in the venv, torch is not
+   installed in the system python), add the result to the fixtures.
+3. **Use case 2 (aubio frames to notes)**: BiGRU tagger, JS side feeds aubio output.
+4. **Use case 1 (compose/jam)**: GRU over MIDI event tokens, `sample()` for generation.
+5. **Use case 3 (mix advice)**: DSP metrics first, a model only where metrics fail.
+6. Perf: this qjsm runs about 7M simple loop iterations/s (2026-11-26), so a 400k-MAC layer costs ~60 ms; measure a 2-layer GRU(256) step; if too slow, an optional native `matvec` helper.
 
 ## How to work on C tasks here
 
@@ -62,15 +85,13 @@ Facts verified against this tree, so you do not have to rediscover them:
 
 ## Next, in this order
 
-1. **Rest of the Tensor/Session surface** from `doc/native/ort.md`: element type string, float16 later;
-  `options.providers` for `Session`; `ort.providers`; wide paths
-  on Windows.
-2. **FindONNXRuntime, rest**: let CMake call `tools/fetch-onnxruntime.sh` itself when nothing is found
-  (`BUILD_ORT`-style option), and the Termux variant (Android needs the aar).
+- **Check on the real targets**: Windows wide path (`js_ort_session_from_file` compiles with mingw, never run),
+  the Android library and `nnapi` on a phone (use the `remote-targets` skill), CUDA with a CUDA build of ONNX
+  Runtime on the workstation (the RTX 2070), XNNPACK on the Pi.
+- **Float16 tensors** (still postponed): no typed array in this QuickJS, so `Uint16Array` bits or a helper; decide first.
 - **opencv-imgproc.js**: an `ort` backend for `--dnn-model` next to `dnn` (qjs-opencv's file, ask first).
 - `runAsync()` through a worker thread and a promise (no JS calls from ORT threads).
-- Other execution providers (XNNPACK, NNAPI on the phone, CUDA on the workstation) through `options.providers`.
-- Float16 tensors; `IoBinding` for reusing output buffers in a realtime loop (audio blocks).
+- `IoBinding` for reusing output buffers in a realtime loop (audio blocks).
 - Register in the stacks: js-engines `PROJ_ort` in menuconfig (`Config.qjs-projects.in`, `configs/*_defconfig`,
   `tools/kconfig/check-options.sh`, requested from that session), through the N-API adapter on Bun/Deno
   (`qjs-api-wrap/napi-qjs-wrap.cpp`; the other adapters are `sm-`, `v8-`, `jsc-qjs-wrap.cpp` there). The quickjs
