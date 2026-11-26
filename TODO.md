@@ -36,6 +36,12 @@ for models that can be exported to ONNX. Done: format, Linear, Embedding, LayerN
 3. **Use case 2 (aubio frames to notes)**: BiGRU tagger, JS side feeds aubio output.
 4. **Use case 1 (compose/jam)**: GRU over MIDI event tokens, `sample()` for generation.
 5. **Use case 3 (mix advice)**: DSP metrics first, a model only where metrics fail.
+   **Use case 5 (vector graphics, icons and glyphs as SVG paths)**: plan in `doc/AM-DNN-CASES.md`; starts with the
+   dataset builder from fonts, `tools/svg-render.js`, then the 5b vectorizer; inference on `ort.so` (KV-cache export).
+   **Use case 6 (schematic image to netlist)**: plan in `doc/AM-DNN-CASES.md`; starts with `tools/render-eagle.js`
+   (the author's ~295 EAGLE `.sch` files give exact labels) and the connectivity/ERC code on ground-truth inputs.
+   Target images are book scans and photos (decided 2026-11-26): corpus survey and the review page come first, then
+   the degradation pipeline; real labelled figures decide the result.
 6. Perf: this qjsm runs about 7M simple loop iterations/s (2026-11-26), so a 400k-MAC layer costs ~60 ms; measure a 2-layer GRU(256) step; if too slow, an optional native `matvec` helper.
 
 ## How to work on C tasks here

@@ -554,3 +554,47 @@
 	identical object counts. BUGS has init-api-env-failure-leaves-api-set,
 	found while reading js_ort_init_api.
 
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	Plan a fifth use case, vector graphics, in the nn/ document.
+
+	* doc/AM-DNN-CASES.md:
+	Case 5: icons and glyphs as SVG path tokens. Data from fonts and
+	icon sets, a 5a generator and a 5b vectorizer, render-loss
+	fine-tuning, inference on ort.so because the transformer is too slow
+	for pure JS, evaluation with a rating page, milestones and risks.
+	The priority section and the open questions name Case 5.
+
+	* TODO.md:
+	The nn/ list has the new case.
+
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	Plan a sixth use case, schematic image to netlist.
+
+	* doc/AM-DNN-CASES.md:
+	Case 6: a pipeline of a symbol detector, a text reader, a wire and
+	junction extractor, a pin locator, and exact JS connectivity and rule
+	checks. Labels come from rendering the author's EAGLE .sch files and
+	open KiCad designs; netlist-level metrics, a review page that feeds
+	corrections back as training data, milestones and risks.
+
+	* TODO.md:
+	The nn/ list has the new case.
+
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	Case 6 revised: the schematics come from books, as scans and photos.
+
+	* doc/AM-DNN-CASES.md:
+	New stage 6-0 for capture and rectification, a book-style renderer
+	and a degradation pipeline checked against real scans, the real
+	figures as test and fine-tuning set labelled with the review page
+	(split by book), vintage symbols and tubes, pretrained backbones,
+	staged training, a copyright note, and a milestone order that starts
+	with a corpus survey and the review page. The open questions ask for
+	the books, their language and the number of figures.
+
+	* TODO.md:
+	The Case 6 entry names the book domain.
+

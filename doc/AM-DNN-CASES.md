@@ -1,4 +1,4 @@
-# Music/Audio deep learning use cases
+# Music/Audio (and two graphics) deep learning use cases
 
 Decided 2026-11-26: models are trained in PyTorch (audio-ml venv), exported with `nn/export.py` to `.nnw`, and run
 by the pure-JS `nn/nn.js` (see `doc/nn.md`). qjs-ort (ONNX Runtime) is the cross-check and the fallback for
@@ -14,7 +14,7 @@ The original list:
  - a model which measures dynamics and spectral composition which can find mud/phase-error/etc.  in mixes and provides advice
  - a model which learns which parameters of a synth/effect it must tweak to achieve a specific audio result
 
-## Common groundwork (all four cases)
+## Common groundwork (all cases)
 
 Order matters: the shared pieces make every case cheaper, so they come first.
 
@@ -283,6 +283,264 @@ Parameter ambiguity (several settings give the same sound): regression averages 
 
 ---
 
+## Case 5: vector graphics (icons and glyphs as SVG paths)
+
+Not an audio case: a graphics one, added 2026-11-26. It is the case where `ort.so` earns its place, because the
+model is a transformer that pure-JS inference cannot run at a usable speed (see Model).
+
+### Goal
+Generate and clean up **flat vector graphics in one style**: icons and glyphs made of filled Bézier paths on a
+fixed grid. "Perfect artistic vector graphics" is not a measurable target, so the first target is: at least 80 %
+of the outputs parse, have closed paths, render to something recognisable, and have a sensible node count; the
+artistic quality is judged by the author through a rating loop (below). Full-colour illustration, gradients and
+open-ended text-to-SVG at scale are out of scope (they need a pretrained vision-language model, far beyond a 8 GB GPU).
+
+### Sub-modes
+- **5a. Generation.** Class- or text-conditioned: `icon of a key` -> SVG. Autoregressive over path tokens.
+- **5b. Vectorizer.** A 64x64 or 128x128 bitmap -> clean SVG with few nodes. A learned replacement for potrace,
+  and the better-defined task: the bitmap is the ground truth, so the render loss is exact.
+- **5c. Style transfer** between icon sets, only if 5a works: the style is a prefix token or a small embedding.
+
+### Data
+- **Fonts first.** OFL-licensed fonts (Google Fonts) give hundreds of thousands of clean glyph outlines with
+  consistent winding, few nodes, and a class label (the character). Read with `fontTools` in Python (TrueType
+  quadratics are converted to cubics). This is the free, exactly-labelled dataset, the same role synthetic
+  rendering plays in Case 4.
+- **Icon sets** with permissive licences (Material Icons, Tabler, Lucide, Font Awesome Free; check each licence
+  and record it in the dataset manifest) for real iconography, plus the author's own SVGs for the target style.
+- Normalise every shape: viewBox 0..1, subpaths flattened to `M L C Z` only (arcs and quadratics to cubics),
+  winding made consistent, start point and subpath order canonical (top-left first), transforms baked in, nodes
+  merged within a tolerance. Drop shapes with more than 40 segments or self-intersections.
+- Pairs for 5b are free: render each normalised SVG to a bitmap (random stroke-free fill, small blur and noise,
+  slight affine jitter) and keep the SVG as the label.
+- Split by **source file or font family**, never by glyph, or validation leaks style.
+
+### Representation
+Tokens, one vocabulary of about 100 ids: commands `M L C Z`, `FILL_EVEN`, `FILL_NONZERO`, `BOS`, `EOS`, `SEP`
+(next subpath), and **64 coordinate bins** per axis (a 6-bit grid of the 1x1 box). A cubic is `C` plus six
+coordinate tokens, alternating x and y, so a role embedding (x or y, control or end point) is added. A sequence is
+capped at 256 tokens (about 35 cubic segments). Colour is a palette index token (16 colours) only if 5c needs it.
+Quantisation makes curves slightly jagged: a later refinement head predicts a sub-bin offset per coordinate
+(`+-0.5 bin`, regression), so the output is not limited to the grid.
+
+### Model
+- **5a:** decoder-only transformer, 6 layers, width 256, 4 heads, learned positions, about 5 M parameters, a
+  conditioning prefix of one class or text-embedding token. Trained with next-token cross-entropy, Adam with
+  warm-up and cosine decay, dropout 0.1, on the RTX 2070 (a few hours for fonts plus icons).
+- **5b:** a small Conv encoder (4 stride-2 blocks) on the bitmap, cross-attention into the same decoder.
+- **Inference runs on `ort.so`**, not in `nn.js`: one token step of this model is about 4.7 M MAC, which at the
+  measured speed of this `qjsm` (a few M MAC/s) is seconds per token, minutes per icon. ONNX Runtime does it in
+  milliseconds. Export with a KV cache (decoder with past-key-values inputs and outputs), which is also what
+  `session.run` needs to be called once per token with the cache fed back, the loop of `examples/gru/gru-loop.js`.
+  A tiny variant (3 layers, width 128, about 1.2 M MAC per token) is worth trying in pure JS after the measurement of
+  TODO item 6, and would need a multi-head attention layer added to `nn/nn.js`.
+
+### Losses and the render feedback
+- Stage 1: cross-entropy (plus the offset regression). This teaches syntax and shapes.
+- Stage 2: a **render loss**. A differentiable rasteriser turns the (relaxed) predicted paths into a bitmap that
+  is compared with the target (5b: L2 and an IoU loss; 5a: a loss against a class-conditional CNN or CLIP
+  embedding, later a preference reward). Options, in order: `pydiffvg` if it builds in the Python 3.12 venv, else
+  a small soft rasteriser written in PyTorch (flatten each cubic to 16 points, signed-distance coverage with a
+  sigmoid edge, winding number by summation). Sampling discrete tokens is not differentiable, so for 5a stage 2 is
+  policy-gradient or best-of-n fine-tuning (sample 8, keep the best by reward, train on it), while 5b can use a
+  straight-through relaxation or train an offset head by the render loss only.
+- Regularisers a designer cares about: node count, curvature smoothness, no self-intersection, closed subpaths.
+
+### Rendering and checks in JS
+One exact reference renderer in JS, `tools/svg-render.js` (scanline fill with non-zero and even-odd winding,
+anti-aliased with 4x4 supersampling), used for the 5b dataset dump, for previews, and for evaluation; `qjs-nanovg`
+or `qjs-opencv` can show and save the result. The soft rasteriser of stage 2 must agree with it: a fixture test
+renders 50 shapes with both and requires IoU above 0.98 (the same "one definition, checked" rule as the features
+of Case 4).
+
+### Evaluation
+- **Validity rate**: parses, closed, within the grid, no NaN.
+- **5b**: re-render IoU against the input, chamfer distance of the outlines, node count against potrace on the
+  same bitmaps (the model must be at least as accurate with fewer nodes to be worth it).
+- **5a**: class accuracy of a small CNN trained on the real rendered icons (does it look like a key?), node count
+  and curvature distributions against the training set, novelty (nearest-neighbour distance to the training set,
+  to catch memorisation), and diversity at a fixed temperature.
+- **Artistic quality**: a small HTML page (`tools/rate-icons.html`) showing a grid of 100 outputs with a rating
+  per cell, saved as JSON. The ratings become the evaluation set, and later a preference reward for stage 2.
+
+### Milestones
+1. Dataset builder: fonts and icon sets to normalised paths, token files, manifest with licences; a roundtrip
+   test (tokens -> SVG -> tokens is lossless on the grid).
+2. `tools/svg-render.js` and a viewer page; fixture against a second renderer (Python, `cairosvg` or the soft one).
+3. Train 5b on the font pairs with cross-entropy only, measure IoU and node count, compare with potrace.
+4. Add the render loss and the offset head, show the gain on IoU.
+5. Train 5a on fonts plus icons, validity rate and class accuracy, a first rating round.
+6. ONNX export with KV cache, a JS sampler loop on `ort.so` (`tools/generate-icon.js "key"` -> SVG), latency per icon.
+7. Stage 2 for 5a: best-of-n or policy-gradient with the rating-trained reward.
+8. 5c style prefix, only if the first rating rounds are good.
+
+### Risks
+Sequence length (detailed shapes blow the 256-token cap: split into subpath-level generation, or raise the cap
+and the cost); quantisation jaggedness (the offset head); self-intersections and winding errors (the regularisers
+and a post-process that fixes winding); mode collapse into blobs at low temperature; scraped SVGs with thousands of
+nodes polluting the data (the filter above); licences of icon sets (record, and train the shipped model only on
+what is allowed); KV-cache ONNX export quirks; 8 GB of GPU memory for the longer sequences (gradient
+checkpointing, smaller batch). "Perfect" stays a direction, not a milestone.
+
+---
+
+## Case 6: schematic image to netlist (from book scans and photos)
+
+A second graphics case, added 2026-11-26 and revised the same day: the target images are **figures in books, as
+scans and as photos of pages**. That is a harder domain than a clean CAD export, and it changes the plan: the real
+images (not synthetic ones) decide the result, a capture and rectification stage comes first, and the author's
+own book figures become the labelled test set. The model is not one network but a **pipeline of small models and
+exact algorithms**: the networks see (figure, symbols, text, wires) and plain JS code builds the netlist, because
+connectivity is a graph problem with a right answer, not something to learn end to end.
+
+### Goal
+Take a picture of a book page or figure and produce a **netlist**: the components with their type, reference
+designator and value, and the nets with the (component, pin) pairs on each. From the netlist emit what the author
+needs: SPICE, a KiCad or EAGLE netlist, and an EAGLE `.scr` through the `eagle-circuit` skill, so a figure from a
+book turns into an editable design. A book figure is often **incomplete by design** (values stated in the text, a
+part named only by its symbol, an arrow for "to the next stage"), so the output allows unknowns and marks them.
+"Perfect" is a direction: the target is a good rate of correct netlists on clean scans and a fast way to correct
+the rest (a review page), never silent trust.
+
+### The pipeline
+Each stage is trained or written, tested and measured alone; the output of one is the input of the next.
+- **6-0. Capture and rectification** (new, mostly classical, in `qjs-opencv`). Find the figure on the page (a
+  small classifier says "schematic, other drawing, graph, photo, text") and cut it out; for a photo find the page
+  corners and undo the perspective; flatten the lighting (divide by a blurred background), remove halftone dots and
+  paper texture, deskew by the dominant line angle, normalise the scale by the estimated symbol size, and keep a
+  grayscale image (binarisation destroys thin lines and is only used for the wire stage). A curved page near the
+  spine is out of scope at first (it would need a learned dewarper); the capture page asks for a flat page.
+- **6a. Symbol detector.** Finds every component and says what it is and how it is turned (box, class, rotation 0,
+  90, 180, 270, mirror). The class list follows the **era and field of the books** (open question): resistors (zig-zag
+  and box), capacitors (plain, polarised, variable), inductors and transformers (with core lines), diodes, LED, Zener,
+  bipolar and field-effect transistors, op-amps, switches, relays, lamps, meters, batteries and cells, loudspeaker
+  and microphone, crystals, fuses, ground and supply symbols, ICs as boxes, logic gates, and for older books the
+  **vacuum tubes** (diode, triode, pentode).
+- **6b. Text reader.** Reads designators (`R1`, `C₂` with a subscript), values (`10 kΩ`, `0,1 µF`, `4u7`, `2K2`),
+  supply rails (`+9 V`, `V_CC`), node names (`A`, `OUT`) and, in books, also the **numbers that point to the
+  text** (`(a)`, `Fig. 3.4`, a boxed letter). It attaches each text to the nearest symbol or wire.
+- **6c. Wire and junction extractor.** A small segmentation net gives a wire mask and a junction heat map with the
+  symbols and text masked out, then classical code thins the mask and vectorizes it into straight segments. A scan
+  breaks lines (gaps) and smudges them; the stage bridges small collinear gaps. A crossing is a connection only
+  when there is a dot, or according to the book's convention (see Risks).
+- **6d. Pin locator.** Fixed pin points per symbol class in its canonical frame, moved by rotation and mirror
+  (`symbols/<class>.json`); for an IC box the pin stubs and their numbers or names are detected.
+- **6e. Connectivity.** Pure JS, no learning: union-find over wire segments that touch at junctions or end on a
+  pin, net labels and power symbols merge nets of the same name.
+- **6f. Netlist and checks.** Emit the netlist, run electrical rule checks (floating pins, two outputs on one net,
+  supply shorted to ground, missing values), attach a confidence to every decision, and mark the doubtful spots for
+  the review page.
+
+### Data
+The labels of a real book figure do not exist, so the data plan has three layers, in this order of importance:
+1. **Real figures from the author's books, labelled with the review page** (below). This is the test set and the
+   fine-tuning set. Start with 50 figures to measure the difficulty, aim for 300, stratified by book, by scan
+   against photo, and by era. Everything is split **by book**, never by page or figure, or the same drawing style
+   is in train and test. The corrected netlist and the symbol/wire positions from the review page are the labels.
+2. **Synthetic book-style images** for pre-training, so the networks arrive at the real data already knowing symbols,
+   text and wires. Sources: the author's ~295 EAGLE `.sch` files (exact labels for every stage) and open KiCad
+   designs, drawn by a JS renderer (`tools/render-eagle.js`, sharing the drawing core of Case 5's `svg-render.js`),
+   plus a random circuit generator for rare classes. The renderer has a **book style**: symbol sets of the era
+   (zig-zag resistors, tube symbols, open terminals), line weight variation with a slight wobble, **typeset fonts**
+   (a serif face, italic designators, subscripts, `Ω` and `µ`), and figure captions and arrows near the drawing.
+3. **A degradation pipeline** applied on top, which is what makes synthetic look like a book: halftone and ink
+   spread, paper texture and yellowing, show-through of the other page side, scan noise and lines, small rotation,
+   perspective and lens blur for photos, shadows and uneven light, JPEG at several qualities, resolution from 100
+   to 600 dpi, cropping. It is checked **against real scans by eye with the author** (a contact sheet of 50 real
+   and 50 synthetic crops) and by a classifier trained to tell them apart, which should not do better than
+   chance before pre-training is trusted.
+- A hand-drawn circuit dataset (CGHD is one that exists, check its licence and labels) adds line-style variety.
+- **Copyright**: the book scans stay local. `data/schematics/` is git-ignored, the dataset manifest records the
+  book and page only, and neither the scans nor weights trained on them are published without checking the books'
+  rights. (This is a note to check, not legal advice.)
+- **The labelling loop** keeps the effort small: the synthetic-trained model proposes a netlist for a real figure,
+  the author corrects it in the review page, the correction becomes a label, the model is fine-tuned, repeat. The
+  first 50 figures are slow, later ones get faster as the model learns the books' style.
+
+### Models
+- **6a:** a CenterNet- or RetinaNet-style detector with a **pretrained ImageNet backbone** (ResNet-18 sized, about 5
+  to 10 M parameters; a pretrained backbone is more robust to scan and photo variation than one trained from scratch)
+  and a rotation/mirror head, written with `torchvision` (YOLO-family `ultralytics` code is AGPL, avoid it). The figure
+  is resized so a resistor body is at least 24 px; large figures are tiled with 25 % overlap and merged by NMS; the
+  scale is estimated first (a quick pass, then the real one at the right scale), and test-time augmentation at two
+  scales helps small symbols.
+- **6b:** a CRNN with CTC on text crops, about 1 to 2 M parameters, trained on rendered text in many typeset fonts
+  (free labels) and on the real crops of the labelled figures, with a character set including `Ω µ k M u n p` and
+  subscript handling; Tesseract is the baseline to beat. Decimal commas and the locale of the book matter
+  (the language of the books is an open question).
+- **6c:** a small U-Net (about 2 M parameters), wire mask and junction map, trained with the degradation pipeline so
+  gaps and smudges are in the data; Dice plus BCE on thin lines, focal loss on junctions.
+- **Inference runs on `ort.so`** with `qjs-opencv` for the image work (the `u2netp-poc.js` pattern of this
+  repository): convolutional nets on images are far too slow for pure JS. Everything from 6d on, the graph and the
+  rules, is plain JS and runs in the same engines on Bun, Node and Deno.
+
+### Losses and training
+- 6a: focal loss for the heat map, L1 for box size, CE for rotation and class; class balancing (resistors outnumber
+  tubes 50 to 1) and copy-paste of rare symbols into other figures.
+- 6b: CTC loss. 6c: Dice plus BCE, focal for junctions.
+- **Staged training**: pre-train on synthetic with the full degradation, then fine-tune on the real labelled
+  figures with a small learning rate and the same augmentation (real data is scarce, so it is oversampled and
+  mixed with synthetic in each batch to avoid forgetting).
+- **Consistency fine-tune** on the end metric: cases where a wrong crossing or pin decision changes the netlist are
+  over-sampled (hard negatives: crossings without dots, T-junctions at pins, parallel close wires).
+
+### Evaluation
+- The **test set is real book figures** held out by book, with scans and photos reported separately. Synthetic
+  validation is only a sanity check, never the headline number.
+- Stage metrics: 6a mAP at IoU 0.5 and rotation accuracy; 6b character and whole-string accuracy by class (designator,
+  value, label); 6c wire IoU and junction F1; 6d pin position error in px.
+- **Netlist metrics (the ones that matter)**: match predicted to true components by class and position, then compare
+  the set of (component, pin, net) triples as net-equivalence classes (a net may be named differently, so compare
+  the partitions): pin-connection precision and recall, component F1, value accuracy, and the **exact-netlist rate**.
+- Targets written down before training, to be revised after the first 50 real figures: on clean scans pin-connection
+  F1 above 0.90 and fewer than five corrections per figure; on photos pin-connection F1 above 0.80. The first
+  honest number is the baseline of the synthetic-only model on real figures, and the whole project is measured
+  against how far the real fine-tuning moves it.
+- An error report that attributes each wrong net to its stage (rectification, missed symbol, wrong rotation, broken
+  wire, false junction, misread label), so work goes where the losses are.
+
+### Review page
+`tools/review-netlist.html`: the figure with the detections and the nets overlaid in colour, doubtful spots flagged,
+click to change a class, rotate a symbol, join or cut a wire, correct a value, mark a part as "value in the text".
+Save writes the corrected netlist and the positions, which are the labels for the real set, and the
+emit step exports SPICE/KiCad/EAGLE from it. This page is where the labelled real data comes from, so it is built
+before the networks (milestone 2).
+
+### Milestones
+1. **Corpus survey**: list the books, count figures, scans against photos, eras and languages; pick 20 figures and
+   label them by hand with the review page prototype to calibrate how hard the domain is.
+2. `tools/review-netlist.html` (view, correct, save) and `tools/render-eagle.js`/`render-kicad.js` (sharing the
+   drawing core with Case 5), with the label dumper per stage and a test that a rendered file's netlist matches the
+   `.sch`'s own nets.
+3. **6e/6f on ground-truth inputs** (true symbols, wires, text) must reproduce the netlist exactly: any failure is a
+   code bug found before a network exists. Includes the dot/crossing conventions as a per-figure setting.
+4. **The degradation pipeline** and the real-vs-synthetic contact sheet and classifier check; adjust until it
+   passes.
+5. 6-0 capture and rectification (figure finder, perspective, lighting, deskew, scale) on the real scans and
+   photos, judged by eye and by the downstream metric.
+6. 6c wire/junction extractor and the vectorization with gap bridging; 6a detector with rotation and scale
+   estimation; 6d pin tables; 6b text reader. Pre-train on synthetic, record the baseline on real figures.
+7. The whole chain on `ort.so` and `qjs-opencv`: `tools/schematic-to-netlist.js page.jpg out.net`, the netlist
+   metrics, the error report, latency per figure.
+8. The labelling loop to 300 real figures, fine-tuning rounds, the photo set.
+9. Emitters: SPICE, KiCad netlist, EAGLE `.scr` (round trip: figure, netlist, `.scr`, loaded in EAGLE).
+
+### Risks
+**Domain gap**: synthetic never fully matches a book (the contact sheet and the classifier check it, and real
+fine-tuning is the real fix, so the plan counts on labelling work). Print and capture: halftone and moire,
+show-through, thin lines lost in a bad scan, shadows and curvature in photos (curved pages near the spine are out of
+scope). Drawing conventions: a dot means connected in one book, a hop-over or no dot means not connected in an old
+one (a per-figure setting, ideally detected); buses and labels as the only link between parts; text touching wires;
+dashed lines for boxes; **vintage symbol sets and tubes** that no modern library has (add classes as the corpus
+demands); non-schematic figures in the same book (the figure classifier must reject graphs and block diagrams, or
+accept block diagrams as a different, easier output); multi-unit ICs and pin numbers that exist only in a datasheet;
+values in odd notation or only in the surrounding text; text in a language the OCR was not trained on; netlists
+that look plausible but are wrong (hence confidences, rule checks and the review page, never silent output);
+copyright of the scans. Out of scope at first: multi-sheet hierarchy, simulation of the circuit's behaviour, curved
+pages, whole pages with several figures handled automatically (the figure is cut out by hand or the finder).
+
+---
+
 ## Priority and dependencies
 
 1. Common groundwork items 1-3, and the speed measurement (TODO item 6).
@@ -292,7 +550,16 @@ Parameter ambiguity (several settings give the same sound): regression averages 
    event tokeniser exists, it does not depend on audio).
 5. **Case 3** (measurement layer is independent and can be built any time; the model needs the fault-injection
    dataset and real labels, which take longest).
+6. **Case 5** (independent of the audio cases; start with the 5b vectorizer on font pairs once Case 4 has proven
+   the train/export/verify loop, and plan the ONNX KV-cache export because the model needs `ort.so`).
+7. **Case 6** (schematic to netlist; shares the renderer core with Case 5, and its 6e/6f connectivity code needs no
+   model, so it can start with milestones 1 to 3 at any time; the real figures and the review page come first, the
+   networks only need the existing `u2netp`-style ORT plus `qjs-opencv` inference pattern, so they do not wait for
+   Case 5).
 
 Open questions for the author: which synth to target first in Case 4; what MIDI/DAW material exists for Case 1;
 which instruments the transcription of Case 2 should cover first; which DAW/plugin chain the Case 3 advice
-should be expressed for.
+should be expressed for; which icon style or sets Case 5 targets and which licences the shipped model may use; for Case 6: which books (era, field: tube
+or transistor or digital), the language of their text, how many figures are available as scans against photos, whether
+the author wants to label real figures with the review page (the real labels decide the result), whether the
+`.sch` files may all be used as training data, and the symbol standard of the books (zig-zag or box resistors).
