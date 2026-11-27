@@ -618,3 +618,33 @@
 	22.05 kHz, the conv model with time-flattened output, the dataset
 	sizes, the milestones done and open).
 
+
+2026-11-26  Roman Senn  <roman.l.senn@gmail.com>
+
+	Add tools/eval-synth.js, the baseline comparison for Case 4.
+
+	* tools/eval-synth.js:
+	New. Renders truth, model, nearest-neighbour and random labels with
+	the STK patch for each test note and prints the log-mel L1 distance
+	to the target. On 300 test notes: truth 0.000 (the patch is
+	deterministic), model 2.88 dB, nearest neighbour (one 6000-example
+	shard) 5.69, random 21.65.
+
+2026-11-27  Roman Senn  <roman.l.senn@gmail.com>
+
+	Bring the docs and TODO.md up to date with the finished Case 4
+	training and evaluation.
+
+	* doc/AM-DNN-CASES.md:
+	The Case 4 status says training is done (validation loss 0.1256,
+	per-parameter errors), the evaluation section has the measured
+	distances against the baselines and their limits, milestones 3 and
+	5 are marked done.
+
+	* doc/nn.md:
+	The file table lists tools/eval-synth.js, the Case 4 workflow has
+	its command and the measured result.
+
+	* TODO.md:
+	Case 4 is trained and evaluated; the in-progress entry points at
+	tools/match-synth.js.

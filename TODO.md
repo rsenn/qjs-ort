@@ -14,8 +14,7 @@ Done so far, see the ChangeLog: CMake skeleton, `FindONNXRuntime.cmake`, `tools/
 ## In progress
 
 - **Case 4 (nn/)**: paused for the detour that is now done (ort surface and FindONNXRuntime, see ChangeLog).
-  `run-train.sh` waits for the shards in the background (log `out/train.log`); when it is done: JS check,
-  `tools/match-synth.js`, `tools/eval-synth.js`, see the nn/ section.
+  Training and `tools/eval-synth.js` are done; next `tools/match-synth.js`, see the nn/ section.
 
 ## nn/: PyTorch-trained models, pure-JS inference (decided 2026-11-26)
 
@@ -25,12 +24,12 @@ for models that can be exported to ONNX. Done: format, Linear, Embedding, LayerN
 (multi-layer, bidirectional, carried state), activations, softmax, sampling; numpy-reference test
 `tests/nn-test.js`. Next, in this order:
 
-1. **Use case 4 (synth parameters from audio), IN PROGRESS** (STK patch `nn/synths/stkpatch.js`, 18 parameters).
+1. **Use case 4 (synth parameters from audio), IN PROGRESS, trained and evaluated** (STK patch `nn/synths/stkpatch.js`, 18 parameters).
    Done: patch + spec (JCRev fix, see ChangeLog), JS mel front end, dataset renderer, trainer, JS model, venv
-   `~/.venvs/audio-ml` with PyTorch (CUDA works). Running: shards re-rendering into `data/synth/` (8 x 6000 train,
-   val 2000, test 300) and `run-train.sh` (smoke test, then 60 epochs, log `out/train.log`). Still to write:
-   `tools/match-synth.js` (wav -> params -> render), `tools/eval-synth.js` (spectral distance vs random and
-   nearest-neighbour baselines on test.nnw), a stkpatch determinism test, the 4b refinement search.
+   `~/.venvs/audio-ml` with PyTorch (CUDA works). Done: shards in `data/synth/` (8 x 6000 train,
+   val 2000, test 300), 60-epoch training (`out/train.log`). Still to write:
+   `tools/match-synth.js` (wav -> params -> render), a stkpatch determinism test, the 4b refinement search.
+   `tools/eval-synth.js` is done (model 2.88 dB vs nearest neighbour 5.69 vs random 21.65, 300 test notes).
 2. Check the layers against real torch output once (`export.py` + `torch.nn.GRU` in the venv, torch is not
    installed in the system python), add the result to the fixtures.
 3. **Use case 2 (aubio frames to notes)**: BiGRU tagger, JS side feeds aubio output.

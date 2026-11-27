@@ -17,6 +17,7 @@ file, run it with no native code** (`nn/nn.js`, qjsm, Node, Bun, Deno) when the 
 | `nn/models/synth-params.js` | `SynthParams.load(buffer).predict(mel, midi)`: JS inference of the Case 4 model. |
 | `tools/render-dataset.js` | Renders random patches and writes features, labels and pitch as `.nnw`. |
 | `train/synth-params.py` | The PyTorch trainer of Case 4 (conv + MLP), writes the model and a `.check.nnw`. |
+| `tools/eval-synth.js` | Renders truth, model, nearest-neighbour and random labels for the test notes and prints the log-mel L1 distance to the target. |
 | `tests/nn-test.js` | Every layer against numpy references (`tests/nn/make-fixtures.py` writes `tests/nn/nn-test.nnw`). |
 | `tests/nn-features-test.js` | FFT against a DFT, the mel band of a sine, the label roundtrip. |
 | `tests/synth-params-test.js` | JS inference against the PyTorch outputs stored next to the model. |
@@ -73,7 +74,11 @@ qjsm tools/render-dataset.js data/synth/val.nnw 2000 100
 qjsm tools/render-dataset.js data/synth/test.nnw 300 101
 ~/.venvs/audio-ml/bin/python train/synth-params.py data/synth out/synth-params.nnw --epochs 60
 qjsm tests/synth-params-test.js out/synth-params.nnw
+qjsm tools/eval-synth.js out/synth-params.nnw data/synth/test.nnw 300   # about 15 min, 10 notes take 30 s
 ```
+
+Measured on the 300 test notes: model 2.88 dB, nearest neighbour 5.69, random 21.65 (truth 0.000), see
+`AM-DNN-CASES.md` Case 4.
 
 `data/` and `out/` are git-ignored. The venv `~/.venvs/audio-ml` has PyTorch with CUDA and numpy.
 

@@ -230,13 +230,15 @@ Given a target audio clip (a sample, a recording), predict the parameters of a g
 rendering with them sounds like the target. First target: one specific synth patch architecture (the one the
 author uses most; a `stk`/`labsound`/`sndobj` patch to begin with, since those render offline from qjsm).
 
-### Status (2026-11-26)
+### Status (2026-11-27)
 Built: the STK patch (`nn/synths/stkpatch.js`, 18 parameters in `stkpatch.json`), the JS mel front end
 (`nn/features.js`), the dataset renderer (`tools/render-dataset.js`), the trainer (`train/synth-params.py`) and the JS
 model (`nn/models/synth-params.js`, checked against PyTorch to 6e-8 on a smoke-test model). Rendering: 8 x 6000 training
 examples, 2000 validation and 300 test, about 1.3 examples per second per process with ten processes on eight cores
-(a render takes about 0.1 s, the features about 0.3 s). The full 60-epoch training waits for the shards
-(`run-train.sh`, log `out/train.log`). Not yet: `tools/match-synth.js`, `tools/eval-synth.js`, the baselines, 4b.
+(a render takes about 0.1 s, the features about 0.3 s). The 60-epoch training is done (`run-train.sh`, log
+`out/train.log`): validation loss 0.1256, parameter L1 0.1208, flat after epoch 50; worst parameters `osc2Detune`
+(0.244), `osc2Level` (0.228), `wave` (0.185), best `cutoff` (0.040), `reverbMix` (0.042), `release` (0.049).
+`tools/eval-synth.js` is built and run (below). Not yet: `tools/match-synth.js`, 4b.
 What building it taught is in [`nn.md`](nn.md) "Quirks found" (the reverb bug that corrupted the first dataset).
 
 ### Why this comes first
@@ -289,16 +291,22 @@ loop is too slow, so use parameter loss for training and the feature distance on
 - **Spectral distance** between target and the rendering of the predicted parameters (multi-resolution STFT
   and mel-MFCC distance) - the real metric. Baselines: random parameters, nearest neighbour in the training
   set (should be beaten by a wide margin).
+- **Result (2026-11-27, 300 test notes, `tools/eval-synth.js`)**, log-mel L1 distance in dB, mean / median:
+  truth 0.000 / 0.000 (the patch is deterministic), model 2.88 / 2.62, nearest neighbour 5.69 / 5.62, random
+  21.65 / 21.30. The model is about half as far from the target as the baseline. The nearest neighbour searches one
+  6000-example shard on every 4th frame, so it is a weak baseline; a search over all 48 000 examples is not done.
+  The metric is the single-resolution log-mel distance, not yet the multi-resolution STFT/MFCC one.
 - Human check: 20 held-out synthetic targets plus 10 real samples, listen A/B.
 - Out-of-domain: render targets from a *different* patch family and see graceful failure (confidence).
 
 ### Milestones
 1. Done: `nn/synths/stkpatch.json` and the renderer; determinism checked by hand, a test file is still to write.
 2. Done: mel front end in JS (`tests/nn-features-test.js`), a Python loader (`nn/nnw.py`); 50 000 examples rendering.
-3. Built, not yet trained on the full set: `train/synth-params.py` (the conv model directly, no MLP-only baseline).
+3. Done: `train/synth-params.py` trained on the full set (60 epochs, the conv model directly, no MLP-only baseline).
 4. Export and the JS model are done and checked (`tests/synth-params-test.js`); `tools/match-synth.js target.wav ->
    params.json` is to write.
-5. Spectral-distance evaluator and the nearest-neighbour baseline; target: median distance below baseline.
+5. Done: `tools/eval-synth.js`, spectral distance against the nearest-neighbour and random baselines; the median
+   is below the baseline (2.62 against 5.62 dB).
 6. 4b refinement loop and the second synth/effect; then effects chains.
 
 ### Risks
